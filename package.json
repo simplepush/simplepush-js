@@ -1,8 +1,28 @@
 {
   "name": "@simplepush/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript SDK for Simplepush.",
   "license": "MIT OR Apache-2.0",
+  "homepage": "https://simplepu.sh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/simplepush/simplepush-js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/simplepush/simplepush-js/issues"
+  },
+  "keywords": [
+    "simplepush",
+    "push",
+    "notifications",
+    "actionable-notifications",
+    "tasks",
+    "websocket",
+    "events",
+    "human-in-the-loop",
+    "approvals",
+    "end-to-end-encryption"
+  ],
   "type": "module",
   "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
@@ -15,10 +35,13 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
   ],
   "scripts": {
     "build": "tsdown",
+    "prepublishOnly": "bun run typecheck && bun test && bun run build",
     "dev": "tsdown --watch",
     "typecheck": "tsc --noEmit",
     "test": "bun test"

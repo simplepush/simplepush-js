@@ -1,0 +1,40 @@
+{
+  "name": "@simplepush/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for Simplepush.",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "libsodium-wrappers-sumo": "^0.8.4",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/libsodium-wrappers-sumo": "^0.8.2",
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.0",
+    "tsdown": "^0.21.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

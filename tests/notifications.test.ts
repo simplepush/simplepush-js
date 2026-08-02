@@ -88,7 +88,7 @@ describe("sendNotification response shapes", () => {
 describe("notification actions input", () => {
   type ActionsBody = { actionInput?: { actions: { key: string; label: string; style?: string }[] } };
 
-  test("maps to actionInput with plaintext keys, labels, and styles (plaintext send)", async () => {
+  test("maps to actionInput with keys, labels, and styles verbatim (plaintext send)", async () => {
     const calls: RecordedCall[] = [];
     const client = new Client({ apiToken: "tok", fetch: queuedFetch([groupResponse], calls) });
     await client.sendNotification({
@@ -106,17 +106,21 @@ describe("notification actions input", () => {
     expect((calls[0]!.body as Record<string, unknown>).choiceInput).toBeUndefined();
   });
 
-  test("encrypts the label but leaves the key plaintext when the send is encrypted", async () => {
+  test("encrypts both the key and the label when the send is encrypted", async () => {
     const calls: RecordedCall[] = [];
     const client = new Client({ apiToken: "tok", passwords: [["pw", "alerts"]], fetch: queuedFetch([groupResponse], calls) });
     await client.sendNotification({
       topic: "alerts",
-      input: { type: "actions", actions: [{ key: "approve", label: "Approve" }] },
+      input: { type: "actions", actions: [{ key: "approve", label: "Approve", style: "primary" }] },
     });
     const action = (calls[0]!.body as ActionsBody).actionInput!.actions[0]!;
-    expect(action.key).toBe("approve"); // key stays plaintext
-    expect(action.label).not.toBe("Approve"); // label is ciphertext
+    // The key carries the same meaning as the label ("approve"), so it is sealed
+    // too — matching a task's actions input. `style` stays plaintext.
+    expect(action.key).not.toBe("approve");
+    expect(action.label).not.toBe("Approve");
+    expect(action.key.length).toBeGreaterThan(0);
     expect(action.label.length).toBeGreaterThan(0);
+    expect(action.style).toBe("primary");
   });
 
   test("rejects duplicate action keys before sending", async () => {

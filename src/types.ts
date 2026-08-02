@@ -401,8 +401,9 @@ export type CreateNotificationRequest = {
   title?: string;
   content?: string;
   // At most one input, sent as `textInput: {}` XOR `choiceInput: { options }` XOR
-  // `actionInput: { actions }`. The action `label`s are encrypted (like choice
-  // options) when the notification is encrypted; each `key` stays plaintext.
+  // `actionInput: { actions }`. On an encrypted notification each action's `key`
+  // AND `label` are sealed (like choice options, and like a task's actions
+  // input); only `style` stays plaintext.
   textInput?: Record<string, never>;
   choiceInput?: { options: string[] };
   actionInput?: { actions: NotificationAction[] };

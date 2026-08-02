@@ -244,10 +244,11 @@ async function buildNotificationBody(
   } else if (opts.input?.type === "choice") {
     body.choiceInput = { options: await Promise.all(opts.input.options.map((o) => e(o))) };
   } else if (opts.input?.type === "actions") {
-    validateNotificationActions(opts.input.actions);
-    // Each `label` is encrypted like a choice option; `key` stays plaintext and
-    // `style` is a plain render hint.
-    body.actionInput = { actions: await Promise.all(opts.input.actions.map(async (a) => ({ ...a, label: await e(a.label) }))) };
+    validateNotificationActions(opts.input.actions);   // on plaintext, before the encrypt below
+    // Both `key` and `label` are encrypted, exactly like a task's actions input.
+    body.actionInput = {
+      actions: await Promise.all(opts.input.actions.map(async (a) => ({ ...a, key: await e(a.key), label: await e(a.label) }))),
+    };
   }
   return body;
 }

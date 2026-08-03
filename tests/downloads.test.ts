@@ -110,7 +110,7 @@ describe("makeDownloadable", () => {
   test("encrypted without a matching key rejects", async () => {
     const key = new Uint8Array(32).fill(7);
     const blob = Uint8Array.from(atob(await encrypt(key, "secret")), (c) => c.charCodeAt(0));
-    const d = makeDownloadable(ctx(blob, []), "inputs", { id: "in-3" }, { type: "personal", passwordFingerprint: "nope" });
+    const d = makeDownloadable(ctx(blob, []), "inputs", { id: "in-3" }, { type: "personal", keyFingerprint: "nope" });
     expect(d.read()).rejects.toThrow(DownloadError);
   });
 

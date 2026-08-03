@@ -65,7 +65,7 @@ describe("note-to-self (topicless send)", () => {
     const body = post.body as Record<string, unknown>;
     expect(body.topic).toBeUndefined();
     expect((body.encryption as Record<string, unknown>).type).toBe("personal");
-    expect((body.encryption as Record<string, unknown>).passwordFingerprint).toBeDefined();
+    expect((body.encryption as Record<string, unknown>).keyFingerprint).toBeDefined();
     expect(body.content).not.toBe("hi");
     expect(body.title).not.toBe("secret");
   });

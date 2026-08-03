@@ -6,7 +6,7 @@ export type EventCategory = "task" | "submission" | "notification";
 // personal-mode content carries a key fingerprint; org-mode content the
 // master_key version. Mutually exclusive; absent means plaintext.
 export type EncryptionMarker =
-  | { type: "personal"; passwordFingerprint: string }
+  | { type: "personal"; keyFingerprint: string }
   | { type: "org"; v: number };
 
 /** Who performed a receive-side action, assembled server-side. `publicId` is

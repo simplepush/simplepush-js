@@ -11,7 +11,7 @@ describe("Client `passwords` config", () => {
     const client = new Client({ apiToken: "tok", passwords: [["topic-pw", "alerts"]] });
     const ring = await client.keyring();
     const dk = await deriveKey("topic-pw", "alerts");
-    expect(ring.keyForMarker({ type: "personal", passwordFingerprint: dk.fingerprint })).toEqual(dk.symmetricKey);
+    expect(ring.keyForMarker({ type: "personal", keyFingerprint: dk.fingerprint })).toEqual(dk.symmetricKey);
   });
 
   test("a bare default password derives the account key when the salt is included", async () => {
@@ -24,7 +24,7 @@ describe("Client `passwords` config", () => {
     const client = new Client({ apiToken: "tok", passwords: "account-pw", fetch: fakeFetch });
     const ring = await client.keyring({ includePasswordSalt: true });
     const dk = await deriveKey("account-pw", "server-salt");
-    expect(ring.keyForMarker({ type: "personal", passwordFingerprint: dk.fingerprint })).toEqual(dk.symmetricKey);
+    expect(ring.keyForMarker({ type: "personal", keyFingerprint: dk.fingerprint })).toEqual(dk.symmetricKey);
   });
 
   test("the account key is NOT derived without includePasswordSalt", async () => {
@@ -34,7 +34,7 @@ describe("Client `passwords` config", () => {
     const client = new Client({ apiToken: "tok", passwords: "account-pw", fetch: fakeFetch });
     const ring = await client.keyring(); // no salt → no /v1/user fetch
     const dk = await deriveKey("account-pw", "server-salt");
-    expect(ring.keyForMarker({ type: "personal", passwordFingerprint: dk.fingerprint })).toBeUndefined();
+    expect(ring.keyForMarker({ type: "personal", keyFingerprint: dk.fingerprint })).toBeUndefined();
   });
 
   test("invalid passwords entry throws", () => {
@@ -53,7 +53,7 @@ describe("Client `passwords` config", () => {
     const ring = await client.keyring();
     const dk = await deriveKey("pw", "deploys");
     const ct = await encrypt(dk.symmetricKey, "secret");
-    const key = ring.keyForMarker({ type: "personal", passwordFingerprint: dk.fingerprint });
+    const key = ring.keyForMarker({ type: "personal", keyFingerprint: dk.fingerprint });
     expect(key).toEqual(dk.symmetricKey);
     void ct;
   });

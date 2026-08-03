@@ -864,7 +864,7 @@ abstract class BaseClient {
 /** The send key the handle uses to decrypt the recipient's replies/inputs, for a
  * password-encrypted (personal) send. Org sends decrypt via the client keyring. */
 function personalSendKey(enc: { key: Uint8Array; marker: EncryptionMarker } | undefined): SendKey | undefined {
-  if (enc && enc.marker.type === "personal") return { key: enc.key, fingerprint: enc.marker.passwordFingerprint };
+  if (enc && enc.marker.type === "personal") return { key: enc.key, fingerprint: enc.marker.keyFingerprint };
   return undefined;
 }
 
@@ -952,7 +952,7 @@ export class Client extends BaseClient {
     if (pw === undefined) return undefined;
     const dk = await deriveKey(pw, topic);
     this.rememberKey(dk);
-    return { key: dk.symmetricKey, marker: { type: "personal", passwordFingerprint: dk.fingerprint } };
+    return { key: dk.symmetricKey, marker: { type: "personal", keyFingerprint: dk.fingerprint } };
   }
 
   /** Encryption material for a topicless "note to self": derived from the account
@@ -965,7 +965,7 @@ export class Client extends BaseClient {
     if (salt === undefined) return undefined;
     const dk = await deriveKey(this.defaultPassword, salt);
     this.rememberKey(dk);
-    return { key: dk.symmetricKey, marker: { type: "personal", passwordFingerprint: dk.fingerprint } };
+    return { key: dk.symmetricKey, marker: { type: "personal", keyFingerprint: dk.fingerprint } };
   }
 
   /** Send a task to a topic. DEFAULT (independent mode): every recipient gets

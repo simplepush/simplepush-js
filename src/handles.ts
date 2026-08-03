@@ -46,7 +46,7 @@ export type SendKey = { key: Uint8Array; fingerprint: string };
  * file-download path. */
 export function buildKeyResolver(keyring: Keyring | undefined, sendKey: SendKey | undefined): KeyResolver {
   return async (marker) => {
-    if (sendKey && marker.type === "personal" && marker.passwordFingerprint === sendKey.fingerprint) {
+    if (sendKey && marker.type === "personal" && marker.keyFingerprint === sendKey.fingerprint) {
       return sendKey.key;
     }
     return keyring?.keyForMarker(marker);

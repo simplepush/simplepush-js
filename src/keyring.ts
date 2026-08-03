@@ -78,7 +78,7 @@ export class Keyring {
    * master_key by version. */
   keyForMarker(marker: EncryptionMarker): Uint8Array | undefined {
     return marker.type === "personal"
-      ? this.byFingerprint.get(marker.passwordFingerprint)?.symmetricKey
+      ? this.byFingerprint.get(marker.keyFingerprint)?.symmetricKey
       : this.byVersion.get(marker.v);
   }
 

@@ -182,7 +182,7 @@ export type CreateTaskRequest = {
   links: string[];
   files: FileAttachmentUploadData[];
   autoCommit: boolean;
-  encryption?: { type: "personal"; passwordFingerprint: string } | { type: "org"; v: number };
+  encryption?: { type: "personal"; keyFingerprint: string } | { type: "org"; v: number };
   reply?: ReplyMode;
   contentFormat?: ContentFormat;
   /** Recipient-state model. Absent/false (the default) = INDEPENDENT: every
@@ -263,7 +263,7 @@ export type SubtaskData = {
   links: string[];
   files: FileAttachmentUploadData[];
   autoCommit: boolean;
-  encryption?: { type: "personal"; passwordFingerprint: string } | { type: "org"; v: number };
+  encryption?: { type: "personal"; keyFingerprint: string } | { type: "org"; v: number };
   critical?: boolean;
   reply?: ReplyMode;
   contentFormat?: ContentFormat;
@@ -409,7 +409,7 @@ export type CreateNotificationRequest = {
   actionInput?: { actions: NotificationAction[] };
   // At most one media attachment (image/audio), as a link or an uploaded file.
   media?: NotificationMedia;
-  encryption?: { type: "personal"; passwordFingerprint: string } | { type: "org"; v: number };
+  encryption?: { type: "personal"; keyFingerprint: string } | { type: "org"; v: number };
   // iOS Critical Alert (bypasses silent mode / Do Not Disturb). Android ignores it.
   critical?: boolean;
   contentFormat?: ContentFormat;

@@ -1026,8 +1026,10 @@ export class Client extends BaseClient {
   /** Append a subtask to an existing task's chain, identified by its
    * `appendToken` (returned at task creation — there is no fetch-by-id). Stateless:
    * no `Task` handle required. With `topic`/`password` the body is encrypted under
-   * the topic key (must match the parent's encryption); otherwise sent in the
-   * clear. Returns the created subtask's id + minted attachments. */
+   * the topic key (must match the parent's encryption); without a topic it is
+   * encrypted under the client's default password when one is configured — the
+   * same key a topicless self-send parent was sealed with. Returns the created
+   * subtask's id + minted attachments. */
   async appendSubtask(
     opts: { appendToken: string; topic?: string; password?: string; instances?: string[] } & SendSubtaskOptions,
   ): Promise<CreateSubtaskResponse> {
@@ -1035,7 +1037,9 @@ export class Client extends BaseClient {
     if (!rest.content && !(rest.inputs && rest.inputs.length > 0)) {
       throw new Error("Either content or inputs must be provided");
     }
-    const enc = topic !== undefined ? await this.personalEnc(topic, password) : undefined;
+    if (topic === undefined && password !== undefined)
+      throw new Error("password requires a topic; a topicless append is encrypted with the client's default password");
+    const enc = topic !== undefined ? await this.personalEnc(topic, password) : await this.selfSendEnc();
     const prepared = await prepareFileAttachments(rest.files, enc?.key);
     const data = await buildSubtaskData(rest, enc, prepared.map((p) => p.meta));
     const resp = await createSubtask({

@@ -41,6 +41,7 @@ export { deriveKey, encrypt, decrypt, decryptBytes, fingerprintFor, type Derived
 export { Task, TaskGroup, Subtask, Notification, NotificationGroup, WatchedTask, WatchedTaskGroup, WatchedNotification, WatchedNotificationGroup, type StreamOptions, type SendKey, type GroupReply, type GroupInput, type ActivityItem, type GroupActivity, type GroupNotification } from "./handles.js";
 export { EventHub, type EventHubConfig } from "./hub.js";
 export { routingId } from "./events.js";
+export { cancelTask, cancelSubtask, cancelTaskGroup } from "./cancel.js";
 export type {
   Decryptor,
   Upload,
@@ -66,6 +67,8 @@ export type {
   TaskCompleted,
   SubtaskCompleted,
   TaskDeleted,
+  TaskCanceled,
+  SubtaskCanceled,
   NotificationCompleted,
   TaskInputItem,
   SubtaskInputItem,
@@ -109,6 +112,10 @@ export type {
   CreateSubtaskRequest,
   SubtaskData,
   SendSubtaskOptions,
+  CancelReason,
+  CancelOptions,
+  CancelRequestBody,
+  CancelGroupResult,
   NotificationInput,
   NotificationTextInput,
   NotificationChoiceInput,

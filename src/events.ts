@@ -42,6 +42,8 @@ export function eventCategory(event: Event): EventCategory | undefined {
     case "TaskInputUploaded":
     case "TaskDeletedByRecipient":
     case "TaskDeleted":
+    case "TaskCanceled":
+    case "SubtaskCanceled":
       return "task";
     case "SubmissionCreated":
       return "submission";
@@ -95,6 +97,8 @@ export function eventSubtypes(event: Event): string[] {
     }
     case "TaskDeletedByRecipient": return ["task.deleted-by-recipient"];
     case "TaskDeleted": return ["task.deleted"];
+    case "TaskCanceled": return ["task.canceled"];
+    case "SubtaskCanceled": return ["task.subtask.canceled"];
     case "NotificationCompleted": {
       const t = (event.data as { reply?: { type?: string } | null } | null)?.reply?.type;
       return t === "text" ? ["notification.text"] : t === "choice" ? ["notification.choice"] : ["notification.completed"];

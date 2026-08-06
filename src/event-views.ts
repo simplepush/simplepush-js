@@ -7,7 +7,7 @@
 
 import { makeDownloadable, type DownloadContext, type DownloadTransport, type Downloadable, type KeyResolver } from "./downloads.js";
 import type { Actor, EncryptionMarker, Event } from "./events.js";
-import type { NotificationReply } from "./types.js";
+import type { CancelReason, NotificationReply } from "./types.js";
 
 /** Decrypts a marked ciphertext string, or returns it unchanged when no key
  * matches / it isn't encrypted. Built by a handle from its send key + the
@@ -105,17 +105,26 @@ export type InputEvent = { kind: "input"; type: string; uploads: Upload[]; actor
 export type TaskCompleted = { kind: "taskCompleted"; taskId?: string; uploads: Upload[]; actor?: Actor; raw: Event };
 export type SubtaskCompleted = { kind: "subtaskCompleted"; subtaskId?: string; parentTaskId?: string; uploads: Upload[]; actor?: Actor; raw: Event };
 export type TaskDeleted = { kind: "taskDeleted"; taskId?: string; createdAt?: string; actor?: Actor; raw: Event };
+/** The sender withdrew the task. Entity-wide terminal: it ends the root's
+ * streams AND every subtask stream of the chain (a canceled root closes the
+ * whole chain — the backend emits no per-subtask events for it). `note` is
+ * decrypted where the chain's key is held. */
+export type TaskCanceled = { kind: "taskCanceled"; taskId?: string; reason?: CancelReason; note?: string; supersededBy?: string; createdAt?: string; actor?: Actor; raw: Event };
+/** The sender withdrew ONE follow-up; the rest of the chain stays live.
+ * `supersededBy` names the replacement subtask (same chain). */
+export type SubtaskCanceled = { kind: "subtaskCanceled"; subtaskId?: string; parentTaskId?: string; reason?: CancelReason; note?: string; supersededBy?: string; createdAt?: string; actor?: Actor; raw: Event };
 export type NotificationCompleted = { kind: "notificationCompleted"; notificationId?: string; reply?: NotificationReply; actor?: Actor; raw: Event };
 
 /** Items yielded by `Task.inputs()`: intermediate input events, then a terminal
- * `taskCompleted` (full committed set) or `taskDeleted`. */
-export type TaskInputItem = InputEvent | TaskCompleted | TaskDeleted;
+ * `taskCompleted` (full committed set), `taskDeleted`, or `taskCanceled`. */
+export type TaskInputItem = InputEvent | TaskCompleted | TaskDeleted | TaskCanceled;
 /** Items yielded by `Subtask.inputs()`: intermediate input events, then a
- * terminal `subtaskCompleted` (full committed set) or `taskDeleted`. */
-export type SubtaskInputItem = InputEvent | SubtaskCompleted | TaskDeleted;
+ * terminal `subtaskCompleted` (full committed set), `subtaskCanceled` (this
+ * follow-up withdrawn), or `taskDeleted` / `taskCanceled` (chain-wide). */
+export type SubtaskInputItem = InputEvent | SubtaskCompleted | SubtaskCanceled | TaskDeleted | TaskCanceled;
 /** Items yielded by `Task.replies()` / `Subtask.replies()`: replies, ending with
- * `taskDeleted`. */
-export type ReplyItem = Reply | TaskDeleted;
+ * `taskDeleted` / `taskCanceled` (or `subtaskCanceled` on a subtask stream). */
+export type ReplyItem = Reply | TaskDeleted | TaskCanceled | SubtaskCanceled;
 /** Items yielded by `Notification.inputs()`: a single `notificationCompleted`. */
 export type NotificationItem = NotificationCompleted;
 
@@ -232,8 +241,10 @@ async function wrapLocation(loc: unknown, marker: EncryptionMarker | undefined, 
 }
 
 /** Wrap a `replyAppended` event into a typed `Reply`. */
-export async function wrapReply(ev: Event, dec: Decryptor, dl?: DownloadContext): Promise<Reply> {
+export async function wrapReply(ev: Event, dec: Decryptor, dl?: DownloadContext): Promise<Reply | SubtaskCanceled> {
   const data = obj(ev.data);
+  // A subtask's reply stream also wants its own cancel (scoped terminal).
+  if (data.type === "subtaskCanceled") return subtaskCanceledMarker(ev, dec);
   const reply = obj(data.reply);
   const marker = obj(reply.encryption) as EncryptionMarker | undefined;
   const m = reply.encryption ? marker : undefined;
@@ -299,7 +310,7 @@ export async function wrapSubmission(
 
 /** Wrap a task OR subtask input/completion event. The completion events become
  * the dedicated terminal markers; the rest become `InputEvent`. */
-export async function wrapInput(ev: Event, dec: Decryptor, dl?: DownloadContext): Promise<InputEvent | TaskCompleted | SubtaskCompleted> {
+export async function wrapInput(ev: Event, dec: Decryptor, dl?: DownloadContext): Promise<InputEvent | TaskCompleted | SubtaskCompleted | SubtaskCanceled> {
   const data = obj(ev.data);
   const marker = ev.encryption;
   const dataType = str(data.type) ?? "";
@@ -309,6 +320,7 @@ export async function wrapInput(ev: Event, dec: Decryptor, dl?: DownloadContext)
   if (dataType === "subtaskCompleted") {
     return { kind: "subtaskCompleted", subtaskId: str(data.subtaskId), parentTaskId: str(data.parentTaskId), uploads: await wrapUploads(data.inputsUploaded, marker, dec, dl), actor: ev.actor, raw: ev };
   }
+  if (dataType === "subtaskCanceled") return subtaskCanceledMarker(ev, dec);
   const hasUpload =
     dataType === "taskInputUploaded" || dataType === "taskInputCompleted" ||
     dataType === "subtaskInputUploaded" || dataType === "subtaskInputCompleted";
@@ -348,4 +360,39 @@ export function deletedMarker(ev: Event): TaskDeleted {
   // routing id: a task chain root (notifications have no deletion event).
   const id = str(data.taskId) ?? str(data.parentTaskId);
   return { kind: "taskDeleted", taskId: id, createdAt: ev.createdAt, actor: ev.actor, raw: ev };
+}
+
+/** Build a marker on the `taskCanceled` entity-wide terminal. The event
+ * envelope's `encryption` is the NOTE's own marker (not the task's — the note
+ * is this event's only encrypted field and may use a different key than the
+ * send), so the generic envelope decrypt below is exactly right;
+ * reason/supersededBy stay plaintext. */
+export async function canceledMarker(ev: Event, dec: Decryptor): Promise<TaskCanceled> {
+  const data = obj(ev.data);
+  return {
+    kind: "taskCanceled",
+    taskId: str(data.taskId),
+    reason: str(data.reason) as CancelReason | undefined,
+    note: await dec(ev.encryption, str(data.note)),
+    supersededBy: str(data.supersededBy),
+    createdAt: ev.createdAt,
+    actor: ev.actor,
+    raw: ev,
+  };
+}
+
+/** Build a marker on the `subtaskCanceled` scoped terminal. */
+export async function subtaskCanceledMarker(ev: Event, dec: Decryptor): Promise<SubtaskCanceled> {
+  const data = obj(ev.data);
+  return {
+    kind: "subtaskCanceled",
+    subtaskId: str(data.subtaskId),
+    parentTaskId: str(data.parentTaskId),
+    reason: str(data.reason) as CancelReason | undefined,
+    note: await dec(ev.encryption, str(data.note)),
+    supersededBy: str(data.supersededBy),
+    createdAt: ev.createdAt,
+    actor: ev.actor,
+    raw: ev,
+  };
 }

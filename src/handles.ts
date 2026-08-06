@@ -10,8 +10,9 @@ import type { DownloadContext, DownloadTransport, KeyResolver } from "./download
 import type { EncryptionMarker, Event } from "./events.js";
 import type { EventHub } from "./hub.js";
 import type { Keyring } from "./keyring.js";
-import type { NotificationGroupRecipient, SendSubtaskOptions, TaskGroupRecipient } from "./types.js";
+import type { CancelGroupResult, CancelOptions, NotificationGroupRecipient, SendSubtaskOptions, TaskGroupRecipient } from "./types.js";
 import {
+  canceledMarker,
   deletedMarker,
   wrapInput,
   wrapNotification,
@@ -25,9 +26,23 @@ import {
 
 const TASK_INPUT_TYPES = new Set(["taskInputUploaded", "taskInputCompleted", "taskCompleted"]);
 const TASK_INPUT_TERMINAL = new Set(["taskCompleted"]);
-const SUBTASK_INPUT_TYPES = new Set(["subtaskInputUploaded", "subtaskInputCompleted", "subtaskCompleted"]);
-const SUBTASK_INPUT_TERMINAL = new Set(["subtaskCompleted"]);
+const SUBTASK_INPUT_TYPES = new Set(["subtaskInputUploaded", "subtaskInputCompleted", "subtaskCompleted", "subtaskCanceled"]);
+const SUBTASK_INPUT_TERMINAL = new Set(["subtaskCompleted", "subtaskCanceled"]);
 const REPLY_TYPES = new Set(["replyAppended"]);
+// A subtask's reply stream additionally ends on ITS OWN cancel (scoped);
+// chain-wide terminals (deleted/canceled root) are handled entity-wide below.
+const SUBTASK_REPLY_TYPES = new Set([...REPLY_TYPES, "subtaskCanceled"]);
+const SUBTASK_REPLY_TERMINAL = new Set(["subtaskCanceled"]);
+
+/** Data-types that end a stream ENTITY-WIDE — they ignore subtask scope, so a
+ * deleted or sender-canceled root ends the chain's every stream (the backend
+ * emits no per-subtask events for either). Maps each type to its marker
+ * builder; notifications pass an empty table (no deletion/cancel events). */
+const ENTITY_TERMINALS: Record<string, (ev: Event, dec: Decryptor) => unknown | Promise<unknown>> = {
+  taskDeleted: (ev) => deletedMarker(ev),
+  taskCanceled: (ev, dec) => canceledMarker(ev, dec),
+};
+const NO_ENTITY_TERMINALS: typeof ENTITY_TERMINALS = {};
 // Combined "everything happening on the task": inputs (incl. the terminal
 // `taskCompleted`) AND replies, over ONE subscription — so a deletion surfaces
 // exactly once (not once per stream). Nothing is terminal here: replies can keep
@@ -78,9 +93,9 @@ type StreamConfig<T> = {
   sendKey: SendKey | undefined;
   want: Set<string>;
   terminal: Set<string>;
-  /** Data-type that ends the stream entity-wide (`taskDeleted`), or undefined
-   * when the entity has no deletion event (notifications). */
-  deletedType: string | undefined;
+  /** Entity-wide terminal table (see ENTITY_TERMINALS); NO_ENTITY_TERMINALS
+   * for entities with no deletion/cancel event (notifications). */
+  entityTerminals: typeof ENTITY_TERMINALS;
   /** Wire transport for file downloads (undefined for notifications, which
    * carry no files). Combined with the stream's key resolver into the
    * `DownloadContext` bound onto file-ish view objects. */
@@ -120,9 +135,10 @@ async function* streamEntity<T>(
 
   for await (const ev of cfg.hub.attach(cfg.rootId, attachOpts)) {
     const dt = dataType(ev);
-    // Deletion is entity-wide terminal — it ignores subtask scope.
-    if (cfg.deletedType !== undefined && dt === cfg.deletedType) {
-      yield deletedMarker(ev) as unknown as T;
+    // Deletion and root-cancel are entity-wide terminal — they ignore subtask scope.
+    const entityWrap = cfg.entityTerminals[dt];
+    if (entityWrap !== undefined) {
+      yield (await entityWrap(ev, dec)) as unknown as T;
       return;
     }
     const sub = eventSubtaskId(ev);
@@ -157,6 +173,12 @@ type HandleDeps = {
  * transport and the parent's encryption (a subtask's encryption must match). */
 type AppendSubtaskFn = (opts: SendSubtaskOptions) => Promise<Subtask>;
 
+/** Cancels a task/subtask — injected by the client, which holds the transport,
+ * the sender credential, and the chain's encryption (for the note). */
+type CancelFn = (opts: CancelOptions) => Promise<void>;
+/** Group-level cancel — resolves to the backend's {canceled, skipped} counts. */
+type CancelGroupFn = (opts: CancelOptions) => Promise<CancelGroupResult>;
+
 /** READ-ONLY handle for observing a task by id: `inputs()` / `replies()` /
  * `activity()` stream off the shared multiplexed event hub. This is the whole
  * capability a collector needs — and the whole capability it gets: no wait or
@@ -190,7 +212,7 @@ export class WatchedTask {
         downloads: this.deps.downloads,
         want: TASK_INPUT_TYPES,
         terminal: TASK_INPUT_TERMINAL,
-        deletedType: "taskDeleted",
+        entityTerminals: ENTITY_TERMINALS,
         wrap: wrapInput,
       },
       opts,
@@ -210,7 +232,7 @@ export class WatchedTask {
         downloads: this.deps.downloads,
         want: REPLY_TYPES,
         terminal: new Set(),
-        deletedType: "taskDeleted",
+        entityTerminals: ENTITY_TERMINALS,
         wrap: wrapReply,
       },
       opts,
@@ -233,7 +255,7 @@ export class WatchedTask {
         downloads: this.deps.downloads,
         want: ACTIVITY_TYPES,
         terminal: new Set(),
-        deletedType: "taskDeleted",
+        entityTerminals: ENTITY_TERMINALS,
         wrap: (ev, dec, dl) => (dataType(ev) === "replyAppended" ? wrapReply(ev, dec, dl) : wrapInput(ev, dec, dl)),
       },
       opts,
@@ -248,14 +270,16 @@ export class Task extends WatchedTask {
   /** Signed capability to append subtasks to this chain. */
   readonly appendToken: string;
   private readonly appendSubtaskFn: AppendSubtaskFn;
+  private readonly cancelFn: CancelFn;
 
   constructor(
-    args: { taskId: string; createdAt: string; waitToken: string; appendToken: string; appendSubtask: AppendSubtaskFn; recipient?: TaskGroupRecipient } & HandleDeps,
+    args: { taskId: string; createdAt: string; waitToken: string; appendToken: string; appendSubtask: AppendSubtaskFn; cancel: CancelFn; recipient?: TaskGroupRecipient } & HandleDeps,
   ) {
     super(args);
     this.waitToken = args.waitToken;
     this.appendToken = args.appendToken;
     this.appendSubtaskFn = args.appendSubtask;
+    this.cancelFn = args.cancel;
   }
 
   /** Append a subtask to this task's chain and return a `Subtask` handle. The
@@ -263,6 +287,15 @@ export class Task extends WatchedTask {
    * was sent encrypted, its encryption. */
   append(opts: SendSubtaskOptions = {}): Promise<Subtask> {
     return this.appendSubtaskFn(opts);
+  }
+
+  /** Cancel this pending task (sender-side withdrawal). Recipients see the card
+   * flip to canceled; a collector's stream ends with a `taskCanceled` marker.
+   * `supersededBy` (a task id) requires `reason: "superseded"`. The note is
+   * encrypted under the chain's key when the send was. Idempotent on re-cancel;
+   * rejects (`task_already_completed`) if the task was answered first. */
+  cancel(opts: CancelOptions = {}): Promise<void> {
+    return this.cancelFn(opts);
   }
 }
 
@@ -437,12 +470,14 @@ export class TaskGroup extends WatchedTaskGroup<Task> {
   /** GROUP-kind capability: appends one subtask per member instance. */
   readonly appendToken: string;
   private readonly appendFn: AppendSubtaskGroupFn;
+  private readonly cancelFn: CancelGroupFn;
 
-  constructor(args: { groupId: string; createdAt: string; waitToken: string; appendToken: string; instances: Task[]; append: AppendSubtaskGroupFn }) {
+  constructor(args: { groupId: string; createdAt: string; waitToken: string; appendToken: string; instances: Task[]; append: AppendSubtaskGroupFn; cancel: CancelGroupFn }) {
     super(args);
     this.waitToken = args.waitToken;
     this.appendToken = args.appendToken;
     this.appendFn = args.append;
+    this.cancelFn = args.cancel;
   }
 
   /** Append one fresh subtask per member instance, atomically (all-or-nothing).
@@ -452,6 +487,15 @@ export class TaskGroup extends WatchedTaskGroup<Task> {
   append(opts: SendSubtaskOptions & { instances?: string[] } = {}): Promise<Subtask[]> {
     const { instances, ...rest } = opts;
     return this.appendFn(rest, instances);
+  }
+
+  /** Cancel every still-pending member instance (cancel-the-rest: `reason:
+   * "answered"` after one member's answer landed). Completed/canceled members
+   * are skipped, never failed — the result reports both counts. `supersededBy`
+   * names a replacement GROUP id (requires `reason: "superseded"`); the server
+   * points each canceled instance at its own recipient's replacement. */
+  cancel(opts: CancelOptions = {}): Promise<CancelGroupResult> {
+    return this.cancelFn(opts);
   }
 }
 
@@ -463,12 +507,20 @@ export class Subtask {
   readonly parentTaskId: string;
   readonly createdAt: string;
   private readonly deps: HandleDeps;
+  private readonly cancelFn: CancelFn;
 
-  constructor(args: { subtaskId: string; parentTaskId: string; createdAt: string } & HandleDeps) {
+  constructor(args: { subtaskId: string; parentTaskId: string; createdAt: string; cancel: CancelFn } & HandleDeps) {
     this.subtaskId = args.subtaskId;
     this.parentTaskId = args.parentTaskId;
     this.createdAt = args.createdAt;
+    this.cancelFn = args.cancel;
     this.deps = { hub: args.hub, getKeyring: args.getKeyring, ...(args.sendKey ? { sendKey: args.sendKey } : {}), ...(args.downloads ? { downloads: args.downloads } : {}) };
+  }
+
+  /** Cancel this pending follow-up while the chain stays live. `supersededBy`
+   * must name a subtask of the SAME chain (requires `reason: "superseded"`). */
+  cancel(opts: CancelOptions = {}): Promise<void> {
+    return this.cancelFn(opts);
   }
 
   /** Yields `InputEvent`s for this subtask, then a terminal `subtaskCompleted`
@@ -484,15 +536,16 @@ export class Subtask {
         downloads: this.deps.downloads,
         want: SUBTASK_INPUT_TYPES,
         terminal: SUBTASK_INPUT_TERMINAL,
-        deletedType: "taskDeleted",
+        entityTerminals: ENTITY_TERMINALS,
         wrap: wrapInput,
       },
       opts,
     );
   }
 
-  /** Yields `Reply`s anchored to this subtask, ending with `taskDeleted` if the
-   * chain is deleted, or after `idleMs` of silence. */
+  /** Yields `Reply`s anchored to this subtask, ending with `subtaskCanceled`
+   * (this follow-up withdrawn), `taskDeleted` / `taskCanceled` (chain-wide),
+   * or after `idleMs` of silence. */
   replies(opts: StreamOptions = {}): AsyncIterableIterator<ReplyItem> {
     return streamEntity<ReplyItem>(
       {
@@ -502,9 +555,9 @@ export class Subtask {
         getKeyring: this.deps.getKeyring,
         sendKey: this.deps.sendKey,
         downloads: this.deps.downloads,
-        want: REPLY_TYPES,
-        terminal: new Set(),
-        deletedType: "taskDeleted",
+        want: SUBTASK_REPLY_TYPES,
+        terminal: SUBTASK_REPLY_TERMINAL,
+        entityTerminals: ENTITY_TERMINALS,
         wrap: wrapReply,
       },
       opts,
@@ -542,7 +595,7 @@ export class WatchedNotification {
         downloads: this.deps.downloads,
         want: NOTIFICATION_TYPES,
         terminal: NOTIFICATION_TYPES,
-        deletedType: undefined,
+        entityTerminals: NO_ENTITY_TERMINALS,
         wrap: wrapNotification,
       },
       opts,

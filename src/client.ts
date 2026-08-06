@@ -15,8 +15,12 @@ import { wrapSubmission, type Submission } from "./event-views.js";
 import { createTask } from "./tasks.js";
 import { createNotification } from "./notifications.js";
 import { createSubtask } from "./subtasks.js";
+import { cancelSubtask, cancelTask, cancelTaskGroup } from "./cancel.js";
 import { prepareFileAttachments, prepareNotificationMedia, uploadFileAttachments, type PreparedFile } from "./attachments.js";
 import type {
+  CancelGroupResult,
+  CancelOptions,
+  CancelRequestBody,
   CreateTaskRequest,
   CreateTaskJsonResponse,
   CreateTaskGroupJsonResponse,
@@ -275,6 +279,32 @@ async function buildSubtaskData(
     ...(opts.reply !== undefined ? { reply: opts.reply } : {}),
     ...(opts.contentFormat !== undefined ? { contentFormat: opts.contentFormat } : {}),
     ...(enc ? { encryption: enc.marker } : {}),
+  };
+}
+
+/** Build the flat wire body of a cancel POST from plaintext options: validate
+ * the reason/pointer coupling client-side (mirrors the server's rule) and
+ * encrypt the note under the chain's key, like `buildSubtaskData` does for
+ * content. `reason`/`supersededBy` stay plaintext (server-visible metadata). */
+async function buildCancelBody(
+  opts: CancelOptions,
+  enc: { key: Uint8Array; marker: EncryptionMarker } | undefined,
+): Promise<CancelRequestBody> {
+  const reason = opts.reason ?? "canceled";
+  if (opts.supersededBy !== undefined && reason !== "superseded") {
+    throw new Error('supersededBy requires reason: "superseded"');
+  }
+  return {
+    reason,
+    // The note carries its OWN marker (not the task's): a cancel is authored
+    // after the send, so an org note may use a newer master_key version than
+    // the task's marker names.
+    ...(opts.note !== undefined
+      ? enc
+        ? { note: await encrypt(enc.key, opts.note), encryption: enc.marker }
+        : { note: opts.note }
+      : {}),
+    ...(opts.supersededBy !== undefined ? { supersededBy: opts.supersededBy } : {}),
   };
 }
 
@@ -621,6 +651,7 @@ abstract class BaseClient {
       waitToken: resp.waitToken,
       appendToken: resp.appendToken,
       appendSubtask: (opts) => this.appendSubtaskFromHandle(resp.appendToken, resp.taskId, opts, enc, downloads),
+      cancel: (opts) => this.cancelTaskFromHandle(resp.taskId, opts, enc),
       hub,
       getKeyring: () => this.keyring(),
       ...(sendKey ? { sendKey } : {}),
@@ -647,6 +678,7 @@ abstract class BaseClient {
         // a plain `string | null`.
         recipient: { publicId: inst.recipient.publicId, name: inst.recipient.name ?? null },
         appendSubtask: (opts) => this.appendSubtaskFromHandle(inst.appendToken, inst.taskId, opts, enc, downloads),
+        cancel: (opts) => this.cancelTaskFromHandle(inst.taskId, opts, enc),
         hub,
         getKeyring: () => this.keyring(),
         ...(sendKey ? { sendKey } : {}),
@@ -660,6 +692,7 @@ abstract class BaseClient {
       appendToken: resp.groupAppendToken,
       instances,
       append: (opts, subset) => this.appendSubtaskGroupFromHandle(resp.groupAppendToken, opts, enc, downloads, subset),
+      cancel: (opts) => this.cancelGroupFromHandle(resp.groupId, opts, enc),
     });
   }
 
@@ -768,6 +801,7 @@ abstract class BaseClient {
         subtaskId: s.subtaskId,
         parentTaskId: s.taskId,
         createdAt: resp.createdAt,
+        cancel: (opts) => this.cancelSubtaskFromHandle(s.subtaskId, opts, enc),
         hub,
         getKeyring: () => this.keyring(),
         ...(sendKey ? { sendKey } : {}),
@@ -809,11 +843,29 @@ abstract class BaseClient {
       subtaskId: resp.subtaskId,
       parentTaskId,
       createdAt: resp.createdAt,
+      cancel: (opts) => this.cancelSubtaskFromHandle(resp.subtaskId, opts, enc),
       hub,
       getKeyring: () => this.keyring(),
       ...(sendKey ? { sendKey } : {}),
       downloads,
     });
+  }
+
+  /** Cancel a task by id under the sender credential. The chain's encryption
+   * (`enc`) covers the note. */
+  private async cancelTaskFromHandle(taskId: string, opts: CancelOptions, enc: { key: Uint8Array; marker: EncryptionMarker } | undefined): Promise<void> {
+    const body = await buildCancelBody(opts, enc);
+    await cancelTask({ baseUrl: this.baseUrl, taskId, body, authHeaders: this.createAuthHeaders(), fetch: this.fetchImpl });
+  }
+
+  private async cancelSubtaskFromHandle(subtaskId: string, opts: CancelOptions, enc: { key: Uint8Array; marker: EncryptionMarker } | undefined): Promise<void> {
+    const body = await buildCancelBody(opts, enc);
+    await cancelSubtask({ baseUrl: this.baseUrl, subtaskId, body, authHeaders: this.createAuthHeaders(), fetch: this.fetchImpl });
+  }
+
+  private async cancelGroupFromHandle(groupId: string, opts: CancelOptions, enc: { key: Uint8Array; marker: EncryptionMarker } | undefined): Promise<CancelGroupResult> {
+    const body = await buildCancelBody(opts, enc);
+    return cancelTaskGroup({ baseUrl: this.baseUrl, groupId, body, authHeaders: this.createAuthHeaders(), fetch: this.fetchImpl });
   }
 
   protected notificationHandle(resp: CreateNotificationJsonResponse, enc: { key: Uint8Array; marker: EncryptionMarker } | undefined): Notification {

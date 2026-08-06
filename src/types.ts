@@ -254,6 +254,38 @@ export function isSubtaskGroupResponse(resp: CreateSubtaskResponse): resp is Cre
   return "groupId" in resp;
 }
 
+// --- Sender-side cancellation ---
+
+/** Why the sender canceled: plain withdrawal, another recipient's answer made
+ * this instance moot (`answered`), or a replacement exists (`superseded`). */
+export type CancelReason = "canceled" | "answered" | "superseded";
+
+/** Options for `Task.cancel()` / `Subtask.cancel()`. `supersededBy` names the
+ * replacement (a task id, or a subtask id of the SAME chain for a subtask
+ * cancel) and requires `reason: "superseded"`. `note` is free text for the
+ * recipients — encrypted under the chain's key when the send was encrypted. */
+export type CancelOptions = {
+  reason?: CancelReason;
+  note?: string;
+  supersededBy?: string;
+};
+
+/** Wire body of the three cancel POSTs (flat, not `{data: …}`). `encryption`
+ * is the NOTE's own marker (a cancel is authored after the send, so an org
+ * note may use a newer master_key version than the task's marker names);
+ * absent = the note is plaintext. */
+export type CancelRequestBody = {
+  reason: CancelReason;
+  note?: string;
+  supersededBy?: string;
+  encryption?: { type: "personal"; keyFingerprint: string } | { type: "org"; v: number };
+};
+
+/** How a group cancel landed: `canceled` instances were still pending and got
+ * the cancel; `skipped` were already terminal (completed or canceled) and were
+ * left untouched. canceled + skipped = instance count. */
+export type CancelGroupResult = { canceled: number; skipped: number };
+
 /** The `data` payload of an append-subtask request (the parent is identified by
  * the signed `appendToken`, not here). */
 export type SubtaskData = {

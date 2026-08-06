@@ -309,11 +309,12 @@ export type NotificationChoiceInput = { type: "choice"; options: string[] };
 /** A single action button on a notification's `actions` input. Reuses the task
  * `Action` shape: `key` is a stable, sender-defined identifier (e.g.
  * "approve"/"deny"), reported back on tap; `label` is the button text; `style` a
- * plaintext render hint. Note the encryption asymmetry vs. a task `Action`: on an
- * encrypted notification only the `label` is encrypted (like a choice option) —
- * the `key` stays PLAINTEXT on the send. The recipient's reply re-encrypts the
- * tapped key (`NotificationActionReply.selectedKey`), keeping the backend blind. */
-export type NotificationAction = { key: string; label: string; style?: "default" | "destructive" };
+ * plaintext render hint. Encryption matches a task `Action` exactly: on an
+ * encrypted notification BOTH the `key` and the `label` are sealed (the key
+ * usually carries the same meaning as the label, so encrypting only the label
+ * would leak the intent), and the recipient's reply re-encrypts the tapped key
+ * (`NotificationActionReply.selectedKey`), keeping the backend blind. */
+export type NotificationAction = { key: string; label: string; style?: ActionStyle };
 /** A notification `actions` input (Accept/Deny-style buttons). Mutually exclusive
  * with `text`/`choice` — a notification carries at most one input. */
 export type NotificationActionInput = { type: "actions"; actions: NotificationAction[] };

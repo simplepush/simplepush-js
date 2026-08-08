@@ -164,10 +164,14 @@ function num(v: unknown): number | undefined {
 
 async function wrapUpload(
   u: Record<string, unknown>,
-  marker: EncryptionMarker | undefined,
+  envelopeMarker: EncryptionMarker | undefined,
   dec: Decryptor,
   dl: DownloadContext | undefined,
 ): Promise<Upload | undefined> {
+  // A record's own marker (aggregate completion events) wins over the
+  // envelope's (single-answer events): answers sealed after an org rotation
+  // carry newer keys than the task's.
+  const marker = (u.encryption as EncryptionMarker | undefined) ?? envelopeMarker;
   const fileMeta = () => ({ id: str(u.id), contentType: str(u.contentType), checksumSha256: str(u.checksumSha256), filename: str(u.filename) });
   switch (u.type) {
     case "textUploaded":

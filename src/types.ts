@@ -286,6 +286,13 @@ export type CancelRequestBody = {
  * left untouched. canceled + skipped = instance count. */
 export type CancelGroupResult = { canceled: number; skipped: number };
 
+// --- Recipient-side decline ---
+
+/** Why a recipient declined: a plain refusal (`declined`), or "tried and
+ * couldn't" (`failed`) — operationally identical for the sender (no answer is
+ * coming from that recipient), so failure is a decline reason, not a status. */
+export type DeclineReason = "declined" | "failed";
+
 /** The `data` payload of an append-subtask request (the parent is identified by
  * the signed `appendToken`, not here). */
 export type SubtaskData = {

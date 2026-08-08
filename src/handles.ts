@@ -13,6 +13,7 @@ import type { Keyring } from "./keyring.js";
 import type { CancelGroupResult, CancelOptions, NotificationGroupRecipient, SendSubtaskOptions, TaskGroupRecipient } from "./types.js";
 import {
   canceledMarker,
+  declinedMarker,
   deletedMarker,
   wrapInput,
   wrapNotification,
@@ -24,23 +25,29 @@ import {
   type TaskInputItem,
 } from "./event-views.js";
 
-const TASK_INPUT_TYPES = new Set(["taskInputUploaded", "taskInputCompleted", "taskCompleted"]);
+// `taskDeclinedByRecipient` is a MID-STREAM signal (never terminal): in shared
+// mode the task stays live for the other recipients, so root input AND reply
+// streams surface it and keep going; the collective `taskDeclined` below is
+// the terminal. Subtask streams never want it (it's task-scoped).
+const TASK_INPUT_TYPES = new Set(["taskInputUploaded", "taskInputCompleted", "taskCompleted", "taskDeclinedByRecipient"]);
 const TASK_INPUT_TERMINAL = new Set(["taskCompleted"]);
-const SUBTASK_INPUT_TYPES = new Set(["subtaskInputUploaded", "subtaskInputCompleted", "subtaskCompleted", "subtaskCanceled"]);
-const SUBTASK_INPUT_TERMINAL = new Set(["subtaskCompleted", "subtaskCanceled"]);
-const REPLY_TYPES = new Set(["replyAppended"]);
+const SUBTASK_INPUT_TYPES = new Set(["subtaskInputUploaded", "subtaskInputCompleted", "subtaskCompleted", "subtaskCanceled", "subtaskDeclinedByRecipient", "subtaskDeclined"]);
+const SUBTASK_INPUT_TERMINAL = new Set(["subtaskCompleted", "subtaskCanceled", "subtaskDeclined"]);
+const REPLY_TYPES = new Set(["replyAppended", "taskDeclinedByRecipient"]);
 // A subtask's reply stream additionally ends on ITS OWN cancel (scoped);
-// chain-wide terminals (deleted/canceled root) are handled entity-wide below.
-const SUBTASK_REPLY_TYPES = new Set([...REPLY_TYPES, "subtaskCanceled"]);
-const SUBTASK_REPLY_TERMINAL = new Set(["subtaskCanceled"]);
+// chain-wide terminals (deleted/canceled/declined root) are entity-wide below.
+const SUBTASK_REPLY_TYPES = new Set(["replyAppended", "subtaskCanceled", "subtaskDeclinedByRecipient", "subtaskDeclined"]);
+const SUBTASK_REPLY_TERMINAL = new Set(["subtaskCanceled", "subtaskDeclined"]);
 
 /** Data-types that end a stream ENTITY-WIDE — they ignore subtask scope, so a
- * deleted or sender-canceled root ends the chain's every stream (the backend
- * emits no per-subtask events for either). Maps each type to its marker
- * builder; notifications pass an empty table (no deletion/cancel events). */
+ * deleted, sender-canceled, or fully-declined root ends the chain's every
+ * stream (the backend emits no per-subtask events for any of them). Maps each
+ * type to its marker builder; notifications pass an empty table (no
+ * deletion/cancel/decline events). */
 const ENTITY_TERMINALS: Record<string, (ev: Event, dec: Decryptor) => unknown | Promise<unknown>> = {
   taskDeleted: (ev) => deletedMarker(ev),
   taskCanceled: (ev, dec) => canceledMarker(ev, dec),
+  taskDeclined: (ev) => declinedMarker(ev),
 };
 const NO_ENTITY_TERMINALS: typeof ENTITY_TERMINALS = {};
 // Combined "everything happening on the task": inputs (incl. the terminal

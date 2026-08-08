@@ -7,7 +7,7 @@
 
 import { makeDownloadable, type DownloadContext, type DownloadTransport, type Downloadable, type KeyResolver } from "./downloads.js";
 import type { Actor, EncryptionMarker, Event } from "./events.js";
-import type { CancelReason, NotificationReply } from "./types.js";
+import type { CancelReason, DeclineReason, NotificationReply } from "./types.js";
 
 /** Decrypts a marked ciphertext string, or returns it unchanged when no key
  * matches / it isn't encrypted. Built by a handle from its send key + the
@@ -113,18 +113,40 @@ export type TaskCanceled = { kind: "taskCanceled"; taskId?: string; reason?: Can
 /** The sender withdrew ONE follow-up; the rest of the chain stays live.
  * `supersededBy` names the replacement subtask (same chain). */
 export type SubtaskCanceled = { kind: "subtaskCanceled"; subtaskId?: string; parentTaskId?: string; reason?: CancelReason; note?: string; supersededBy?: string; createdAt?: string; actor?: Actor; raw: Event };
+/** One recipient declined ("no answer is coming from me") — a MID-STREAM
+ * signal, NOT a terminal: in shared mode the task stays live for the other
+ * recipients, so a collector can count declines down. When the last recipient
+ * declines, the terminal `taskDeclined` follows. `note` is the recipient's
+ * context, decrypted where its key is held; `actor` is the decliner. */
+export type TaskDeclinedByRecipient = { kind: "taskDeclinedByRecipient"; taskId?: string; reason?: DeclineReason; note?: string; createdAt?: string; actor?: Actor; raw: Event };
+/** Every recipient declined — the recipient-side mirror of `taskCanceled`.
+ * Entity-wide terminal: ends the root's streams AND every subtask stream of
+ * the chain. Collective (no actor); per-recipient reasons/notes arrived on
+ * the preceding `taskDeclinedByRecipient` items. */
+export type TaskDeclined = { kind: "taskDeclined"; taskId?: string; createdAt?: string; actor?: Actor; raw: Event };
+/** One recipient refused THIS follow-up — the subtask-scoped twin of
+ * `taskDeclinedByRecipient`: a mid-stream signal, not a terminal. */
+export type SubtaskDeclinedByRecipient = { kind: "subtaskDeclinedByRecipient"; subtaskId?: string; parentTaskId?: string; reason?: DeclineReason; note?: string; createdAt?: string; actor?: Actor; raw: Event };
+/** Every recipient declined ONE follow-up — the decline-side twin of
+ * `subtaskCanceled`: a scoped terminal, the rest of the chain stays live. */
+export type SubtaskDeclined = { kind: "subtaskDeclined"; subtaskId?: string; parentTaskId?: string; createdAt?: string; actor?: Actor; raw: Event };
 export type NotificationCompleted = { kind: "notificationCompleted"; notificationId?: string; reply?: NotificationReply; actor?: Actor; raw: Event };
 
-/** Items yielded by `Task.inputs()`: intermediate input events, then a terminal
- * `taskCompleted` (full committed set), `taskDeleted`, or `taskCanceled`. */
-export type TaskInputItem = InputEvent | TaskCompleted | TaskDeleted | TaskCanceled;
+/** Items yielded by `Task.inputs()`: intermediate input events (including the
+ * mid-stream `taskDeclinedByRecipient` signal), then a terminal
+ * `taskCompleted` (full committed set), `taskDeleted`, `taskCanceled`, or
+ * `taskDeclined`. */
+export type TaskInputItem = InputEvent | TaskCompleted | TaskDeleted | TaskCanceled | TaskDeclinedByRecipient | TaskDeclined;
 /** Items yielded by `Subtask.inputs()`: intermediate input events, then a
  * terminal `subtaskCompleted` (full committed set), `subtaskCanceled` (this
- * follow-up withdrawn), or `taskDeleted` / `taskCanceled` (chain-wide). */
-export type SubtaskInputItem = InputEvent | SubtaskCompleted | SubtaskCanceled | TaskDeleted | TaskCanceled;
-/** Items yielded by `Task.replies()` / `Subtask.replies()`: replies, ending with
- * `taskDeleted` / `taskCanceled` (or `subtaskCanceled` on a subtask stream). */
-export type ReplyItem = Reply | TaskDeleted | TaskCanceled | SubtaskCanceled;
+ * follow-up withdrawn), or `taskDeleted` / `taskCanceled` / `taskDeclined`
+ * (chain-wide). */
+export type SubtaskInputItem = InputEvent | SubtaskCompleted | SubtaskCanceled | TaskDeleted | TaskCanceled | TaskDeclined | SubtaskDeclinedByRecipient | SubtaskDeclined;
+/** Items yielded by `Task.replies()` / `Subtask.replies()`: replies (plus the
+ * mid-stream `taskDeclinedByRecipient` signal on a root stream), ending with
+ * `taskDeleted` / `taskCanceled` / `taskDeclined` (or `subtaskCanceled` on a
+ * subtask stream). */
+export type ReplyItem = Reply | TaskDeleted | TaskCanceled | SubtaskCanceled | TaskDeclinedByRecipient | TaskDeclined | SubtaskDeclinedByRecipient | SubtaskDeclined;
 /** Items yielded by `Notification.inputs()`: a single `notificationCompleted`. */
 export type NotificationItem = NotificationCompleted;
 
@@ -241,10 +263,14 @@ async function wrapLocation(loc: unknown, marker: EncryptionMarker | undefined, 
 }
 
 /** Wrap a `replyAppended` event into a typed `Reply`. */
-export async function wrapReply(ev: Event, dec: Decryptor, dl?: DownloadContext): Promise<Reply | SubtaskCanceled> {
+export async function wrapReply(ev: Event, dec: Decryptor, dl?: DownloadContext): Promise<Reply | SubtaskCanceled | TaskDeclinedByRecipient | SubtaskDeclinedByRecipient | SubtaskDeclined> {
   const data = obj(ev.data);
   // A subtask's reply stream also wants its own cancel (scoped terminal).
   if (data.type === "subtaskCanceled") return subtaskCanceledMarker(ev, dec);
+  // Per-recipient declines are mid-stream signals, not terminals.
+  if (data.type === "taskDeclinedByRecipient") return declinedByRecipientMarker(ev, dec);
+  if (data.type === "subtaskDeclinedByRecipient") return subtaskDeclinedByRecipientMarker(ev, dec);
+  if (data.type === "subtaskDeclined") return subtaskDeclinedMarker(ev);
   const reply = obj(data.reply);
   const marker = obj(reply.encryption) as EncryptionMarker | undefined;
   const m = reply.encryption ? marker : undefined;
@@ -310,7 +336,7 @@ export async function wrapSubmission(
 
 /** Wrap a task OR subtask input/completion event. The completion events become
  * the dedicated terminal markers; the rest become `InputEvent`. */
-export async function wrapInput(ev: Event, dec: Decryptor, dl?: DownloadContext): Promise<InputEvent | TaskCompleted | SubtaskCompleted | SubtaskCanceled> {
+export async function wrapInput(ev: Event, dec: Decryptor, dl?: DownloadContext): Promise<InputEvent | TaskCompleted | SubtaskCompleted | SubtaskCanceled | TaskDeclinedByRecipient | SubtaskDeclinedByRecipient | SubtaskDeclined> {
   const data = obj(ev.data);
   const marker = ev.encryption;
   const dataType = str(data.type) ?? "";
@@ -321,6 +347,10 @@ export async function wrapInput(ev: Event, dec: Decryptor, dl?: DownloadContext)
     return { kind: "subtaskCompleted", subtaskId: str(data.subtaskId), parentTaskId: str(data.parentTaskId), uploads: await wrapUploads(data.inputsUploaded, marker, dec, dl), actor: ev.actor, raw: ev };
   }
   if (dataType === "subtaskCanceled") return subtaskCanceledMarker(ev, dec);
+  // Per-recipient declines are mid-stream signals, not terminals.
+  if (dataType === "taskDeclinedByRecipient") return declinedByRecipientMarker(ev, dec);
+  if (dataType === "subtaskDeclinedByRecipient") return subtaskDeclinedByRecipientMarker(ev, dec);
+  if (dataType === "subtaskDeclined") return subtaskDeclinedMarker(ev);
   const hasUpload =
     dataType === "taskInputUploaded" || dataType === "taskInputCompleted" ||
     dataType === "subtaskInputUploaded" || dataType === "subtaskInputCompleted";
@@ -395,4 +425,49 @@ export async function subtaskCanceledMarker(ev: Event, dec: Decryptor): Promise<
     actor: ev.actor,
     raw: ev,
   };
+}
+
+/** Build the mid-stream `taskDeclinedByRecipient` signal. The envelope's
+ * `encryption` is the NOTE's own marker (see canceledMarker), so the generic
+ * envelope decrypt is exactly right; `reason` stays plaintext. */
+export async function declinedByRecipientMarker(ev: Event, dec: Decryptor): Promise<TaskDeclinedByRecipient> {
+  const data = obj(ev.data);
+  return {
+    kind: "taskDeclinedByRecipient",
+    taskId: str(data.taskId),
+    reason: str(data.reason) as DeclineReason | undefined,
+    note: await dec(ev.encryption, str(data.note)),
+    createdAt: ev.createdAt,
+    actor: ev.actor,
+    raw: ev,
+  };
+}
+
+/** Build a marker on the `taskDeclined` entity-wide terminal (collective —
+ * carries no reason/note of its own; those rode the per-recipient signals). */
+export function declinedMarker(ev: Event): TaskDeclined {
+  const data = obj(ev.data);
+  return { kind: "taskDeclined", taskId: str(data.taskId), createdAt: ev.createdAt, actor: ev.actor, raw: ev };
+}
+
+/** Build the mid-stream `subtaskDeclinedByRecipient` signal (scoped twin of
+ * declinedByRecipientMarker — envelope marker is the NOTE's own). */
+export async function subtaskDeclinedByRecipientMarker(ev: Event, dec: Decryptor): Promise<SubtaskDeclinedByRecipient> {
+  const data = obj(ev.data);
+  return {
+    kind: "subtaskDeclinedByRecipient",
+    subtaskId: str(data.subtaskId),
+    parentTaskId: str(data.parentTaskId),
+    reason: str(data.reason) as DeclineReason | undefined,
+    note: await dec(ev.encryption, str(data.note)),
+    createdAt: ev.createdAt,
+    actor: ev.actor,
+    raw: ev,
+  };
+}
+
+/** Build a marker on the `subtaskDeclined` SCOPED terminal. */
+export function subtaskDeclinedMarker(ev: Event): SubtaskDeclined {
+  const data = obj(ev.data);
+  return { kind: "subtaskDeclined", subtaskId: str(data.subtaskId), parentTaskId: str(data.parentTaskId), createdAt: ev.createdAt, actor: ev.actor, raw: ev };
 }

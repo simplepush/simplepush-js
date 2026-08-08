@@ -272,8 +272,7 @@ export async function wrapReply(ev: Event, dec: Decryptor, dl?: DownloadContext)
   if (data.type === "subtaskDeclinedByRecipient") return subtaskDeclinedByRecipientMarker(ev, dec);
   if (data.type === "subtaskDeclined") return subtaskDeclinedMarker(ev);
   const reply = obj(data.reply);
-  const marker = obj(reply.encryption) as EncryptionMarker | undefined;
-  const m = reply.encryption ? marker : undefined;
+  const m = ev.encryption;
   return {
     kind: "reply",
     id: str(reply.id),
@@ -315,8 +314,7 @@ export async function wrapSubmission(
 ): Promise<Submission> {
   const data = obj(ev.data);
   const submission = obj(data.submission);
-  const marker = obj(submission.encryption) as EncryptionMarker | undefined;
-  const m = submission.encryption ? marker : undefined;
+  const m = ev.encryption;
   const id = str(submission.id);
   const dl: DownloadContext | undefined =
     base && id !== undefined ? { ...base.transport, scope: "submissions", scopeId: id, resolveKey: base.resolveKey } : undefined;

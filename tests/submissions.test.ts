@@ -37,9 +37,10 @@ function base(blob: Uint8Array, calls: Call[], resolveKey: KeyResolver = async (
   return { transport, resolveKey };
 }
 
-function event(submission: Record<string, unknown>): Event {
+function event(submission: Record<string, unknown>, encryption?: Record<string, unknown>): Event {
   return {
     eventType: "SubmissionCreated",
+    ...(encryption ? { encryption } : {}),
     data: { type: "submissionCreated", submission },
   } as unknown as Event;
 }
@@ -106,11 +107,13 @@ describe("wrapSubmission", () => {
     const dec = async (m: unknown, v: string | undefined) =>
       v !== undefined && (m as { type?: string })?.type === "org" ? plaintextLocation : v;
     const sub = await wrapSubmission(
-      event({
-        id: "sbm-8",
-        encryption: marker,
-        location: { encrypted: ciphertextLocation },
-      }),
+      event(
+        {
+          id: "sbm-8",
+          location: { encrypted: ciphertextLocation },
+        },
+        marker as unknown as Record<string, unknown>,
+      ),
       dec,
     );
     expect(sub.location).toEqual(coords);
@@ -130,11 +133,13 @@ describe("wrapSubmission", () => {
     const keyring = await Keyring.build({ passwords: [], topics: [], orgMasterKeys: [{ version, key: orgKey }] });
     const dec = buildDecryptor(buildKeyResolver(keyring, undefined));
     const sub = await wrapSubmission(
-      event({
-        id: "sbm-org-loc",
-        encryption: { type: "org", v: version },
-        location: { encrypted: ciphertextLocation },
-      }),
+      event(
+        {
+          id: "sbm-org-loc",
+          location: { encrypted: ciphertextLocation },
+        },
+        { type: "org", v: version },
+      ),
       dec,
     );
     expect(sub.location).toEqual(coords);
@@ -150,7 +155,7 @@ describe("wrapSubmission", () => {
     const keyring = await Keyring.build({ passwords: [], topics: [], orgMasterKeys: [{ version: 7, key: orgKey }] });
     const dec = buildDecryptor(buildKeyResolver(keyring, undefined));
     const sub = await wrapSubmission(
-      event({ id: "sbm-org-bad", encryption: { type: "org", v: 8 }, location: { encrypted: ciphertextLocation } }),
+      event({ id: "sbm-org-bad", location: { encrypted: ciphertextLocation } }, { type: "org", v: 8 }),
       dec,
     );
     expect(sub.location).toBeUndefined();
@@ -165,10 +170,11 @@ describe("wrapSubmission", () => {
     const dec = buildDecryptor(buildKeyResolver(keyring, undefined));
     const replyEvent = {
       eventType: "ReplyAppended",
+      encryption: { type: "org", v: version },
       data: {
         type: "replyAppended",
         taskId: "task-org-1",
-        reply: { id: "r-org-loc", encryption: { type: "org", v: version }, location: { encrypted: ciphertextLocation } },
+        reply: { id: "r-org-loc", location: { encrypted: ciphertextLocation } },
       },
     } as unknown as Event;
     const reply = (await wrapReply(replyEvent, dec)) as Reply;
@@ -206,12 +212,14 @@ describe("wrapSubmission", () => {
       v !== undefined && (m as { type?: string })?.type === "org" ? plaintextBody : v;
     const resolveKey: KeyResolver = async (m) => (m.type === "org" && m.v === 1 ? key : undefined);
     const sub = await wrapSubmission(
-      event({
-        id: "sbm-5",
-        encryption: marker,
-        body: { type: "text", value: ciphertextBody },
-        file: { id: "sbf-5", contentType: "application/octet-stream", checksumSha256: await sha256Base64(fileBlob), size: fileBlob.length },
-      }),
+      event(
+        {
+          id: "sbm-5",
+          body: { type: "text", value: ciphertextBody },
+          file: { id: "sbf-5", contentType: "application/octet-stream", checksumSha256: await sha256Base64(fileBlob), size: fileBlob.length },
+        },
+        marker,
+      ),
       dec,
       base(fileBlob, calls, resolveKey),
     );

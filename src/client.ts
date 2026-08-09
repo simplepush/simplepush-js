@@ -127,6 +127,10 @@ async function buildBody(
     // Recipient-state model: sent explicitly only when opting into the
     // shared task; absent = the backend's independent-instances default.
     ...(opts.shared ? { shared: true } : {}),
+    // Plaintext metadata like contentFormat; a Date serializes to ISO-8601.
+    ...(opts.expiresAt !== undefined
+      ? { expiresAt: typeof opts.expiresAt === "string" ? opts.expiresAt : opts.expiresAt.toISOString() }
+      : {}),
     ...(enc ? { encryption: enc.marker } : {}),
   };
 }

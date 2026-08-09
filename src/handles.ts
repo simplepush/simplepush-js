@@ -14,6 +14,7 @@ import type { CancelGroupResult, CancelOptions, NotificationGroupRecipient, Send
 import {
   canceledMarker,
   declinedMarker,
+  expiredMarker,
   deletedMarker,
   wrapInput,
   wrapNotification,
@@ -48,6 +49,7 @@ const ENTITY_TERMINALS: Record<string, (ev: Event, dec: Decryptor) => unknown | 
   taskDeleted: (ev) => deletedMarker(ev),
   taskCanceled: (ev, dec) => canceledMarker(ev, dec),
   taskDeclined: (ev) => declinedMarker(ev),
+  taskExpired: (ev) => expiredMarker(ev),
 };
 const NO_ENTITY_TERMINALS: typeof ENTITY_TERMINALS = {};
 // Combined "everything happening on the task": inputs (incl. the terminal

@@ -71,6 +71,7 @@ export type {
   SubtaskCanceled,
   TaskDeclinedByRecipient,
   TaskDeclined,
+  TaskExpired,
   SubtaskDeclinedByRecipient,
   SubtaskDeclined,
   NotificationCompleted,

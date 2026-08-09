@@ -189,6 +189,11 @@ export type CreateTaskRequest = {
    * recipient gets their own task instance under a group; `true` = the single
    * single shared task all recipients see together. */
   shared?: boolean;
+  /** Optional deadline (ISO-8601, must lie in the future). Plaintext metadata
+   * like `contentFormat`. Once it passes with the task still pending, the
+   * backend flips the task to `expired` and emits the terminal `TaskExpired`
+   * event. */
+  expiresAt?: string;
 };
 
 /** Plaintext body for the high-level task send helpers (`Client.sendTask`,
@@ -214,6 +219,10 @@ export type SendOptions = {
    * (the default) = independent per-recipient instances (`sendTask` returns a
    * `TaskGroup`). */
   shared?: boolean;
+  /** Optional deadline. Must lie in the future; a `Date` is serialized to
+   * ISO-8601. Past it, an unanswered task expires (terminal `taskExpired`
+   * on its streams; further answers 409 with `task_expired`). */
+  expiresAt?: Date | string;
 };
 
 // --- Subtask types ---

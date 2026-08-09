@@ -124,6 +124,10 @@ export type TaskDeclinedByRecipient = { kind: "taskDeclinedByRecipient"; taskId?
  * the chain. Collective (no actor); per-recipient reasons/notes arrived on
  * the preceding `taskDeclinedByRecipient` items. */
 export type TaskDeclined = { kind: "taskDeclined"; taskId?: string; createdAt?: string; actor?: Actor; raw: Event };
+/** The task's sender-set deadline passed unanswered — the clock's mirror of
+ * `taskCanceled`. Entity-wide terminal: ends the root's streams AND every
+ * subtask stream of the chain. Collective (no actor, no note). */
+export type TaskExpired = { kind: "taskExpired"; taskId?: string; createdAt?: string; actor?: Actor; raw: Event };
 /** One recipient refused THIS follow-up — the subtask-scoped twin of
  * `taskDeclinedByRecipient`: a mid-stream signal, not a terminal. */
 export type SubtaskDeclinedByRecipient = { kind: "subtaskDeclinedByRecipient"; subtaskId?: string; parentTaskId?: string; reason?: DeclineReason; note?: string; createdAt?: string; actor?: Actor; raw: Event };
@@ -136,17 +140,17 @@ export type NotificationCompleted = { kind: "notificationCompleted"; notificatio
  * mid-stream `taskDeclinedByRecipient` signal), then a terminal
  * `taskCompleted` (full committed set), `taskDeleted`, `taskCanceled`, or
  * `taskDeclined`. */
-export type TaskInputItem = InputEvent | TaskCompleted | TaskDeleted | TaskCanceled | TaskDeclinedByRecipient | TaskDeclined;
+export type TaskInputItem = InputEvent | TaskCompleted | TaskDeleted | TaskCanceled | TaskDeclinedByRecipient | TaskDeclined | TaskExpired;
 /** Items yielded by `Subtask.inputs()`: intermediate input events, then a
  * terminal `subtaskCompleted` (full committed set), `subtaskCanceled` (this
  * follow-up withdrawn), or `taskDeleted` / `taskCanceled` / `taskDeclined`
  * (chain-wide). */
-export type SubtaskInputItem = InputEvent | SubtaskCompleted | SubtaskCanceled | TaskDeleted | TaskCanceled | TaskDeclined | SubtaskDeclinedByRecipient | SubtaskDeclined;
+export type SubtaskInputItem = InputEvent | SubtaskCompleted | SubtaskCanceled | TaskDeleted | TaskCanceled | TaskDeclined | TaskExpired | SubtaskDeclinedByRecipient | SubtaskDeclined;
 /** Items yielded by `Task.replies()` / `Subtask.replies()`: replies (plus the
  * mid-stream `taskDeclinedByRecipient` signal on a root stream), ending with
  * `taskDeleted` / `taskCanceled` / `taskDeclined` (or `subtaskCanceled` on a
  * subtask stream). */
-export type ReplyItem = Reply | TaskDeleted | TaskCanceled | SubtaskCanceled | TaskDeclinedByRecipient | TaskDeclined | SubtaskDeclinedByRecipient | SubtaskDeclined;
+export type ReplyItem = Reply | TaskDeleted | TaskCanceled | SubtaskCanceled | TaskDeclinedByRecipient | TaskDeclined | TaskExpired | SubtaskDeclinedByRecipient | SubtaskDeclined;
 /** Items yielded by `Notification.inputs()`: a single `notificationCompleted`. */
 export type NotificationItem = NotificationCompleted;
 
@@ -450,6 +454,13 @@ export async function declinedByRecipientMarker(ev: Event, dec: Decryptor): Prom
 export function declinedMarker(ev: Event): TaskDeclined {
   const data = obj(ev.data);
   return { kind: "taskDeclined", taskId: str(data.taskId), createdAt: ev.createdAt, actor: ev.actor, raw: ev };
+}
+
+/** Build a marker on the `taskExpired` entity-wide terminal (collective —
+ * the deadline itself lives on the task payload, not the event). */
+export function expiredMarker(ev: Event): TaskExpired {
+  const data = obj(ev.data);
+  return { kind: "taskExpired", taskId: str(data.taskId), createdAt: ev.createdAt, actor: ev.actor, raw: ev };
 }
 
 /** Build the mid-stream `subtaskDeclinedByRecipient` signal (scoped twin of

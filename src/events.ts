@@ -48,6 +48,7 @@ export function eventCategory(event: Event): EventCategory | undefined {
     case "TaskDeclined":
     case "SubtaskDeclinedByRecipient":
     case "SubtaskDeclined":
+    case "TaskExpired":
       return "task";
     case "SubmissionCreated":
       return "submission";
@@ -107,6 +108,7 @@ export function eventSubtypes(event: Event): string[] {
     case "TaskDeclined": return ["task.declined"];
     case "SubtaskDeclinedByRecipient": return ["task.subtask.declined-by-recipient"];
     case "SubtaskDeclined": return ["task.subtask.declined"];
+    case "TaskExpired": return ["task.expired"];
     case "NotificationCompleted": {
       const t = (event.data as { reply?: { type?: string } | null } | null)?.reply?.type;
       return t === "text" ? ["notification.text"] : t === "choice" ? ["notification.choice"] : ["notification.completed"];

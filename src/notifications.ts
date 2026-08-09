@@ -3,6 +3,7 @@
 // completion event off the shared multiplexed event hub.
 
 import { HttpError } from "./errors.js";
+import { fetchWithRetry, mintIdempotencyKey } from "./retry.js";
 import type { CreateNotificationRequest, CreateNotificationResponse } from "./types.js";
 
 export type CreateNotificationOptions = {
@@ -17,10 +18,12 @@ export type CreateNotificationOptions = {
 export async function createNotification(opts: CreateNotificationOptions): Promise<CreateNotificationResponse> {
   const f = opts.fetch ?? fetch;
   const url = new URL("v1/notifications/json", opts.baseUrl).toString();
-  const resp = await f(url, {
+  // One key per logical create — see createTask.
+  const body: CreateNotificationRequest = { idempotencyKey: mintIdempotencyKey(), ...opts.body };
+  const resp = await fetchWithRetry(f, url, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(opts.authHeaders ?? {}) },
-    body: JSON.stringify(opts.body),
+    body: JSON.stringify(body),
   });
   if (!resp.ok) {
     throw new HttpError("POST", "v1/notifications/json", resp.status, await resp.text().catch(() => ""));

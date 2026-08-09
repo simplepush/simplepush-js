@@ -13,6 +13,7 @@ import type { DownloadTransport } from "./downloads.js";
 import { Task, TaskGroup, Subtask, Notification, NotificationGroup, WatchedTask, WatchedTaskGroup, WatchedNotification, WatchedNotificationGroup, buildDecryptor, buildKeyResolver, type SendKey } from "./handles.js";
 import { wrapSubmission, type Submission } from "./event-views.js";
 import { createTask } from "./tasks.js";
+import { mintIdempotencyKey } from "./retry.js";
 import { createNotification } from "./notifications.js";
 import { createSubtask } from "./subtasks.js";
 import { cancelSubtask, cancelTask, cancelTaskGroup } from "./cancel.js";
@@ -156,7 +157,9 @@ export async function buildOrgTaskRequest(
   const enc = masterKey
     ? { key: masterKey.key, marker: { type: "org" as const, v: masterKey.version } }
     : undefined;
-  return buildBody(target, opts, enc, attachments);
+  // Minted at build time: a caller retrying the POST resends the same built
+  // body, so the backend replays instead of re-creating.
+  return { idempotencyKey: mintIdempotencyKey(), ...(await buildBody(target, opts, enc, attachments)) };
 }
 
 /** Notification sibling of `buildOrgTaskRequest`: build a `CreateNotificationRequest`
@@ -179,7 +182,7 @@ export async function buildOrgNotificationRequest(
     enc && media && media.type === "link"
       ? { ...media, url: await encrypt(enc.key, media.url) }
       : media;
-  return buildNotificationBody(target, opts, enc, builtMedia);
+  return { idempotencyKey: mintIdempotencyKey(), ...(await buildNotificationBody(target, opts, enc, builtMedia)) };
 }
 
 /** Subtask sibling of `buildOrgTaskRequest`: build a `CreateSubtaskRequest` for an
@@ -202,7 +205,7 @@ export async function buildOrgSubtaskRequest(
   const enc = masterKey
     ? { key: masterKey.key, marker: { type: "org" as const, v: masterKey.version } }
     : undefined;
-  const data = await buildSubtaskData(opts, enc, attachments);
+  const data = { idempotencyKey: mintIdempotencyKey(), ...(await buildSubtaskData(opts, enc, attachments)) };
   return { appendToken, data, ...(instances !== undefined ? { instances } : {}) };
 }
 

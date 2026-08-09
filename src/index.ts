@@ -133,3 +133,4 @@ export type {
   NotificationActionReply,
 } from "./types.js";
 export type { WebSocketFactory, SimplepushWebSocket } from "./ws.js";
+export { fetchWithRetry, mintIdempotencyKey, defaultRetryPolicy, type RetryPolicy } from "./retry.js";

@@ -3,6 +3,7 @@
 // multiplexed event hub, scoped within the parent task's chain.
 
 import { HttpError } from "./errors.js";
+import { fetchWithRetry, mintIdempotencyKey } from "./retry.js";
 import type { CreateSubtaskRequest, CreateSubtaskResponse } from "./types.js";
 
 export type CreateSubtaskOptions = {
@@ -17,10 +18,15 @@ export type CreateSubtaskOptions = {
 export async function createSubtask(opts: CreateSubtaskOptions): Promise<CreateSubtaskResponse> {
   const f = opts.fetch ?? fetch;
   const url = new URL("v1/subtasks/json", opts.baseUrl).toString();
-  const resp = await f(url, {
+  // Key sits inside `data` (the backend's AppendSubtaskData) — see createTask.
+  const body: CreateSubtaskRequest = {
+    ...opts.body,
+    data: { idempotencyKey: mintIdempotencyKey(), ...opts.body.data },
+  };
+  const resp = await fetchWithRetry(f, url, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(opts.authHeaders ?? {}) },
-    body: JSON.stringify(opts.body),
+    body: JSON.stringify(body),
   });
   if (!resp.ok) {
     throw new HttpError("POST", "v1/subtasks/json", resp.status, await resp.text().catch(() => ""));

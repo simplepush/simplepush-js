@@ -194,6 +194,10 @@ export type CreateTaskRequest = {
    * backend flips the task to `expired` and emits the terminal `TaskExpired`
    * event. */
   expiresAt?: string;
+  /** Replay guard: resending the same create with the same key returns the
+   * original response instead of creating again. Minted automatically by
+   * `createTask` when absent; retries resend it unchanged. */
+  idempotencyKey?: string;
 };
 
 /** Plaintext body for the high-level task send helpers (`Client.sendTask`,
@@ -315,6 +319,8 @@ export type SubtaskData = {
   critical?: boolean;
   reply?: ReplyMode;
   contentFormat?: ContentFormat;
+  /** Replay guard — see CreateTaskRequest.idempotencyKey. */
+  idempotencyKey?: string;
 };
 
 export type CreateSubtaskRequest = {
@@ -466,6 +472,8 @@ export type CreateNotificationRequest = {
    * recipient gets their own notification instance under a group; `true` = the
    * single shared notification the first reply completes for everyone. */
   shared?: boolean;
+  /** Replay guard — see CreateTaskRequest.idempotencyKey. */
+  idempotencyKey?: string;
 };
 
 /** Plaintext body for the high-level notification send helpers

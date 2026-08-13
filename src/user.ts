@@ -1,7 +1,8 @@
-// `GET /v1/user` — api-token-authenticated lookup that returns just enough for
+// `GET /v1/user` — credential-authenticated lookup that returns just enough for
 // senders/CLI clients to build a decryption keyring without holding a device
-// bearer. Wire convention matches the events WebSocket: the api_token rides in
-// an `API-Token` header rather than `Authorization`.
+// bearer. The api_token rides in an `API-Token` header (wire convention shared
+// with the events WebSocket); a bearer credential passes `authHeaders` instead.
+// The endpoint is scope-free on the backend, so any live token reaches it.
 
 export interface UserInfoResponse {
   userId: string;
@@ -14,7 +15,10 @@ export interface UserInfoResponse {
 
 export interface FetchUserInfoOptions {
   baseUrl: URL;
-  apiToken: string;
+  /** API-Token credential. Supply this or `authHeaders`, not both. */
+  apiToken?: string;
+  /** Pre-built credential headers, for bearer-authenticated callers. */
+  authHeaders?: Record<string, string>;
   fetch: typeof fetch;
 }
 
@@ -23,7 +27,7 @@ export async function fetchUserInfo(opts: FetchUserInfoOptions): Promise<UserInf
   const res = await opts.fetch(url.toString(), {
     method: "GET",
     headers: {
-      "API-Token": opts.apiToken,
+      ...(opts.authHeaders ?? (opts.apiToken !== undefined ? { "API-Token": opts.apiToken } : {})),
       Accept: "application/json",
     },
   });

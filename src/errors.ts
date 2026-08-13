@@ -5,7 +5,7 @@ export class SimplepushError extends Error {
 export class MissingApiTokenError extends SimplepushError {
   override readonly name = "MissingApiTokenError";
   constructor() {
-    super("missing API token: pass `apiToken` or set $SP_API_TOKEN");
+    super("missing credential: pass `apiToken` (or `accessToken`), or set $SP_API_TOKEN");
   }
 }
 

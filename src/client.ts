@@ -4,7 +4,7 @@
 // internal `BaseClient`, and differ in auth, stream endpoint, and key material.
 
 import { deriveKey, encrypt, type DerivedKey } from "./crypto.js";
-import { MissingApiTokenError } from "./errors.js";
+import { MissingApiTokenError, SimplepushError } from "./errors.js";
 import type { EncryptionMarker, Event } from "./events.js";
 import { Keyring, type OrgMasterKey } from "./keyring.js";
 import { streamEvents } from "./streams/events-stream.js";
@@ -928,9 +928,16 @@ function personalSendKey(enc: { key: Uint8Array; marker: EncryptionMarker } | un
 }
 
 export type ClientConfig = CommonConfig & {
-  /** User API-Token. Required — a client always carries a credential; it
-   * authenticates the event feed, sends, and file downloads. */
-  apiToken: string;
+  /** User API-Token. Exactly one of `apiToken` / `accessToken` must be given —
+   * a client always carries a credential; it authenticates the event feed,
+   * sends, and file downloads. */
+  apiToken?: string;
+  /** OAuth access token (`spa_…`) carrying `send` / `events:read`, sent as
+   * `Authorization: Bearer`. Interchangeable with `apiToken` at the transport
+   * level — the backend resolves either to the same personal principal — so an
+   * OAuth-authenticated client can send, stream and download exactly like a
+   * token-authenticated one. */
+  accessToken?: string;
   /** Your personal-mode passwords. Either a single default-password string, or a
    * list whose entries are:
    *   - `[password, topic]` pairs — the password for that topic; derives its
@@ -948,21 +955,31 @@ export type ClientConfig = CommonConfig & {
  * event feed at `/ws/v1/events` and derives topic / default keys from
  * `passwords` / `password`. For organization access use `OrgClient`. */
 export class Client extends BaseClient {
-  readonly apiToken: string;
+  readonly apiToken: string | undefined;
+  readonly accessToken: string | undefined;
 
   constructor(config: ClientConfig) {
     super(config);
-    // Required at the type level; the runtime check covers plain-JS callers.
-    if (!config.apiToken) throw new MissingApiTokenError();
+    if (!config.apiToken && !config.accessToken) throw new MissingApiTokenError();
+    if (config.apiToken && config.accessToken) throw new SimplepushError("Client takes either apiToken or accessToken, not both");
     this.apiToken = config.apiToken;
+    this.accessToken = config.accessToken;
     const { topicPasswords, defaultPassword } = parsePasswords(config.passwords);
     this.topicPasswords = topicPasswords;
     this.defaultPassword = defaultPassword;
   }
 
+  /** The API-Token specifically. Throws on a bearer-authenticated client —
+   * use `credentialHeaders()` for anything that only needs *a* credential. */
   requireApiToken(): string {
     if (!this.apiToken) throw new MissingApiTokenError();
     return this.apiToken;
+  }
+
+  /** Whichever credential this client carries, as request headers. Mirrors
+   * `OrgClient.credentialHeaders`. */
+  private credentialHeaders(): Record<string, string> {
+    return this.apiToken !== undefined ? { "API-Token": this.apiToken } : { Authorization: `Bearer ${this.accessToken}` };
   }
 
   /** Observe `Submission`s on this user's stream. `password` overrides the
@@ -979,14 +996,14 @@ export class Client extends BaseClient {
     return "/ws/v1/events";
   }
   protected wsAuthHeaders(): Record<string, string> {
-    return { "API-Token": this.requireApiToken() };
+    return this.credentialHeaders();
   }
   protected downloadAuthHeaders(): Record<string, string> {
-    return { "API-Token": this.requireApiToken() };
+    return this.credentialHeaders();
   }
   protected override async resolvePasswordSalt(): Promise<string | undefined> {
-    if (!this.apiToken) return undefined;
-    const info = await fetchUserInfo({ baseUrl: this.baseUrl, apiToken: this.apiToken, fetch: this.fetchImpl });
+    // `GET /v1/user` is scope-free on the backend, so a bearer reaches it too.
+    const info = await fetchUserInfo({ baseUrl: this.baseUrl, authHeaders: this.credentialHeaders(), fetch: this.fetchImpl });
     return info.passwordSalt;
   }
 
@@ -1150,14 +1167,19 @@ export class OrgClient extends BaseClient {
     this.orgMasterKeys = normalizeOrgMasterKeys(config);
   }
 
+  /** The Api-Key specifically, for the few call sites that genuinely need that
+   * credential rather than any org credential. Sending does NOT: the backend
+   * accepts a session/OAuth bearer on the org send surface too, so it goes
+   * through `credentialHeaders()`. */
   requireApiKey(): string {
-    if (!this.apiKey) throw new Error("this OrgClient is session-authenticated (bearerToken); sending requires an apiKey");
+    if (!this.apiKey) throw new SimplepushError("this OrgClient is session-authenticated (bearerToken); this call requires an apiKey");
     return this.apiKey;
   }
 
-  /** The credential header for surfaces that accept either auth mode: the
-   * events WS and the file-download endpoints (a CLI-session bearer resolves
-   * to the same org identity as an Api-Key server-side). */
+  /** The credential header for surfaces that accept either auth mode: sends,
+   * the events WS and the file-download endpoints (a CLI-session bearer or an
+   * OAuth org grant resolves to the same org identity as an Api-Key
+   * server-side). */
   private credentialHeaders(): Record<string, string> {
     return this.apiKey !== undefined ? { "Api-Key": this.apiKey } : { Authorization: `Bearer ${this.bearerToken}` };
   }
@@ -1169,7 +1191,7 @@ export class OrgClient extends BaseClient {
     return this.credentialHeaders();
   }
   protected override httpAuthHeaders(): Record<string, string> {
-    return { "Api-Key": this.requireApiKey() };
+    return this.credentialHeaders();
   }
   protected downloadAuthHeaders(): Record<string, string> {
     return this.credentialHeaders();

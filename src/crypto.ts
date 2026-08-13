@@ -70,6 +70,34 @@ export async function deriveKey(password: string, salt: string): Promise<Derived
   return { symmetricKey, fingerprint };
 }
 
+/** Wraps an already-derived 32-byte key as a `DerivedKey`, computing its
+ * fingerprint. The counterpart to `deriveKey` for key material that came from
+ * somewhere else — exported from the app, or unwrapped from an integration
+ * token — where the password that produced it is deliberately not shared.
+ *
+ * Accepts raw bytes or the base64 form the app exports (either alphabet), so
+ * callers can pass an environment variable straight through. */
+export async function importKey(key: Uint8Array | string): Promise<DerivedKey> {
+  const s = await sodium();
+  let bytes: Uint8Array;
+  if (typeof key === "string") {
+    const trimmed = key.trim();
+    try {
+      // ORIGINAL first (what fingerprints and the app's export use), then
+      // URLSAFE, so a key copied out of a URL-ish context still loads.
+      bytes = s.from_base64(trimmed, s.base64_variants.ORIGINAL);
+    } catch {
+      bytes = s.from_base64(trimmed, s.base64_variants.URLSAFE_NO_PADDING);
+    }
+  } else {
+    bytes = key;
+  }
+  if (bytes.length !== SYMMETRIC_KEY_LEN) {
+    throw new Error(`symmetric key must be ${SYMMETRIC_KEY_LEN} bytes, got ${bytes.length}`);
+  }
+  return { symmetricKey: bytes, fingerprint: await fingerprintFor(bytes) };
+}
+
 export async function fingerprintFor(symmetricKey: Uint8Array): Promise<string> {
   const s = await sodium();
   const digest = s.crypto_hash_sha256(symmetricKey);

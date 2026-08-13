@@ -23,6 +23,12 @@ export type KeyringInput = {
   /** Org master keys (version -> 32-byte key) for decrypting org-mode content.
    * Without them, org ciphertext can't be read and is left as-is. */
   orgMasterKeys?: OrgMasterKey[];
+  /** Personal keys supplied directly rather than derived from a password —
+   * exported from the app, or unwrapped from an integration token. They match
+   * by fingerprint exactly like derived keys do, because the wire marker is the
+   * same `{type:"personal", keyFingerprint}` either way: a key is a key, and
+   * nothing on the wire records how it was produced. */
+  personalKeys?: DerivedKey[];
 };
 
 export class Keyring {
@@ -43,12 +49,17 @@ export class Keyring {
       ring.byVersion.set(version, key);
     }
 
+    // Added before the early-out so a key-only consumer (no passwords) still
+    // gets a usable keyring.
+    for (const dk of input.personalKeys ?? []) ring.byFingerprint.set(dk.fingerprint, dk);
+
     const jobs: Array<{ password: string; salt: string }> = [];
     for (const password of input.passwords) {
       if (input.passwordSalt) jobs.push({ password, salt: input.passwordSalt });
       for (const topic of input.topics) jobs.push({ password, salt: topic });
     }
     if (jobs.length === 0) return ring;
+
 
     // Argon2id is CPU-bound; running them in parallel via Promise.all gives the
     // WASM scheduler room to interleave but is single-threaded in practice.

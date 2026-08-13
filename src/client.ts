@@ -3,7 +3,7 @@
 // transport — the event stream, task create/wait, and keyring — via the
 // internal `BaseClient`, and differ in auth, stream endpoint, and key material.
 
-import { deriveKey, encrypt, type DerivedKey } from "./crypto.js";
+import { deriveKey, encrypt, importKey, type DerivedKey } from "./crypto.js";
 import { MissingApiTokenError, SimplepushError } from "./errors.js";
 import type { EncryptionMarker, Event } from "./events.js";
 import { Keyring, type OrgMasterKey } from "./keyring.js";
@@ -346,6 +346,34 @@ type CommonConfig = {
  * submissions; decryption-only, never a send password). */
 export type PasswordsConfig = string | Array<[string, string] | string>;
 
+/** A personal key supplied directly: raw 32 bytes, or the base64 the app's key
+ * export produces. */
+export type PersonalKeyInput = string | Uint8Array;
+
+/** The `keys` config — the key-shaped twin of `passwords`, for material that
+ * arrived already derived. A bare key is the Personal Password key (self-sends
+ * and submissions); a `[key, topic]` pair is that topic's key. */
+export type KeysConfig = PersonalKeyInput | Array<PersonalKeyInput | [PersonalKeyInput, string]>;
+
+async function parseKeys(keys: KeysConfig | undefined): Promise<{
+  topicKeys: Array<[DerivedKey, string]>;
+  defaultKey: DerivedKey | undefined;
+}> {
+  if (keys === undefined) return { topicKeys: [], defaultKey: undefined };
+  const items = Array.isArray(keys) && !(keys instanceof Uint8Array) ? keys : [keys as PersonalKeyInput];
+  const topicKeys: Array<[DerivedKey, string]> = [];
+  let defaultKey: DerivedKey | undefined;
+  for (const item of items) {
+    if (Array.isArray(item) && !(item instanceof Uint8Array)) {
+      topicKeys.push([await importKey(item[0]), item[1]]);
+    } else {
+      if (defaultKey !== undefined) throw new Error("only one default key (a bare key) is allowed in `keys`");
+      defaultKey = await importKey(item as PersonalKeyInput);
+    }
+  }
+  return { topicKeys, defaultKey };
+}
+
 function parsePasswords(passwords: PasswordsConfig | undefined): {
   topicPasswords: Array<[string, string]>;
   defaultPassword: string | undefined;
@@ -379,6 +407,17 @@ abstract class BaseClient {
    * submissions; it never encrypts a send. */
   protected topicPasswords: Array<[string, string]> = [];
   protected defaultPassword: string | undefined = undefined;
+  /** The key-shaped twin of the password fields above. Empty on OrgClient,
+   * which has no personal-mode material at all. */
+  protected keysConfig: KeysConfig | undefined = undefined;
+  private keysPromise: Promise<{ topicKeys: Array<[DerivedKey, string]>; defaultKey: DerivedKey | undefined }> | undefined;
+
+  /** Parsed `keys`, resolved once. Async because fingerprinting needs sodium,
+   * which a constructor cannot await. */
+  protected resolvedKeys(): Promise<{ topicKeys: Array<[DerivedKey, string]>; defaultKey: DerivedKey | undefined }> {
+    if (!this.keysPromise) this.keysPromise = parseKeys(this.keysConfig);
+    return this.keysPromise;
+  }
   /** Keys derived at send time, folded into the keyring so the raw `events()`
    * feed can decrypt replies to those sends (handle streams use them directly). */
   private readonly extraKeys: DerivedKey[] = [];
@@ -447,6 +486,11 @@ abstract class BaseClient {
           const passwordSalt = await this.accountSalt();
           if (passwordSalt !== undefined) ring.add(await deriveKey(this.defaultPassword, passwordSalt));
         }
+        // Supplied keys decrypt as well as encrypt — a reply to a send made
+        // under an exported key has to come back readable.
+        const { topicKeys, defaultKey } = await this.resolvedKeys();
+        for (const [dk] of topicKeys) ring.add(dk);
+        if (defaultKey !== undefined) ring.add(defaultKey);
         // Fold in any keys already derived by sends before the keyring was built.
         for (const dk of this.extraKeys) ring.add(dk);
         return ring;
@@ -501,6 +545,8 @@ abstract class BaseClient {
     const keyring = await this.keyring(); // topic + org keys
     // Submissions are encrypted under the account default key (account password +
     // the server-issued password_salt), not a topic key — fold it in for this call.
+    const supplied = await this.resolvedKeys();
+    if (supplied.defaultKey !== undefined) keyring.add(supplied.defaultKey);
     if (defaultPassword !== undefined) {
       const salt = await this.accountSalt();
       if (salt !== undefined) keyring.add(await deriveKey(defaultPassword, salt));
@@ -949,6 +995,10 @@ export type ClientConfig = CommonConfig & {
    * E.g. `"account-pw"` or `[["alerts-pw", "alerts"], "account-pw"]`. A per-send
    * `password` always overrides for that send. */
   passwords?: PasswordsConfig;
+  /** Personal keys supplied directly instead of (or alongside) `passwords` —
+   * see {@link KeysConfig}. A key configured for a topic wins over a password
+   * for that same topic on sends. */
+  keys?: KeysConfig;
 };
 
 /** Personal client, authenticated by a user API-Token. Streams the personal
@@ -967,6 +1017,7 @@ export class Client extends BaseClient {
     const { topicPasswords, defaultPassword } = parsePasswords(config.passwords);
     this.topicPasswords = topicPasswords;
     this.defaultPassword = defaultPassword;
+    this.keysConfig = config.keys;
   }
 
   /** The API-Token specifically. Throws on a bearer-authenticated client —
@@ -1024,6 +1075,18 @@ export class Client extends BaseClient {
     topic: string,
     password: string | undefined,
   ): Promise<{ key: Uint8Array; marker: EncryptionMarker } | undefined> {
+    // A per-send `password` is an explicit override and still wins. Otherwise a
+    // key configured for this topic is preferred over deriving one, since the
+    // caller supplying a key generally does NOT hold the password.
+    if (password === undefined) {
+      const { topicKeys } = await this.resolvedKeys();
+      const hit = topicKeys.find(([, t]) => t === topic);
+      if (hit) {
+        const dk = hit[0];
+        this.rememberKey(dk);
+        return { key: dk.symmetricKey, marker: { type: "personal", keyFingerprint: dk.fingerprint } };
+      }
+    }
     const pw = password ?? this.sendPassword(topic);
     if (pw === undefined) return undefined;
     const dk = await deriveKey(pw, topic);
@@ -1036,6 +1099,13 @@ export class Client extends BaseClient {
    * your submissions, so a note-to-self round-trips to your own clients. Returns
    * undefined (plaintext send) when no default password is configured. */
   private async selfSendEnc(): Promise<{ key: Uint8Array; marker: EncryptionMarker } | undefined> {
+    // A supplied default key skips the whole derivation — and with it the
+    // `GET /v1/user` salt fetch, which only exists to feed Argon2.
+    const { defaultKey } = await this.resolvedKeys();
+    if (defaultKey !== undefined) {
+      this.rememberKey(defaultKey);
+      return { key: defaultKey.symmetricKey, marker: { type: "personal", keyFingerprint: defaultKey.fingerprint } };
+    }
     if (this.defaultPassword === undefined) return undefined;
     const salt = await this.accountSalt();
     if (salt === undefined) return undefined;

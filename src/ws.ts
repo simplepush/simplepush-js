@@ -68,6 +68,18 @@ function adaptWs(sock: WS): SimplepushWebSocket {
   return {
     closed: closedPromise,
     messages,
-    close: () => { try { sock.close(); } catch { /* ignore */ } },
+    close: () => {
+      try { sock.close(); } catch { /* ignore */ }
+      // The server side doesn't always answer the close frame, and `ws` then
+      // holds the socket (and the node event loop) for its 30s close timeout.
+      // The caller is done with the connection — allow a short grace for a
+      // clean handshake, then force-terminate. Node-only; the timer is
+      // unref'd so it never keeps the process alive itself.
+      const terminate = (sock as { terminate?: () => void }).terminate;
+      if (typeof terminate === "function") {
+        const timer = setTimeout(() => { try { terminate.call(sock); } catch { /* ignore */ } }, 1_000);
+        (timer as { unref?: () => void }).unref?.();
+      }
+    },
   };
 }

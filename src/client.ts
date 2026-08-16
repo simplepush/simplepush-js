@@ -342,7 +342,7 @@ type CommonConfig = {
 
 /** The personal-client `passwords` config: a single default-password string, or
  * a list whose entries are `[password, topic]` pairs (a topic key) and/or at most
- * one bare default-password string (the account default key — decrypts your
+ * one bare default-password string (the Personal Password — decrypts your
  * submissions; decryption-only, never a send password). */
 export type PasswordsConfig = string | Array<[string, string] | string>;
 
@@ -403,7 +403,7 @@ abstract class BaseClient {
   /** Personal-mode decrypt/send material (empty for OrgClient). `topicPasswords`
    * are [password, topic] pairs → one topic key each, and the send default for
    * that topic. `defaultPassword` is the user's single account password → the
-   * account default key (salt = server password_salt), which decrypts
+   * Personal Password key (salt = server password_salt), which decrypts
    * submissions; it never encrypts a send. */
   protected topicPasswords: Array<[string, string]> = [];
   protected defaultPassword: string | undefined = undefined;
@@ -426,7 +426,7 @@ abstract class BaseClient {
   private accountSaltPromise: Promise<string | undefined> | null = null;
   private hubInstance: EventHub | null = null;
 
-  /** The account's server-issued `password_salt` (for deriving account default
+  /** The account's server-issued `password_salt` (for deriving Personal Password
    * keys), fetched once. Undefined for an org client / when unavailable. */
   protected accountSalt(): Promise<string | undefined> {
     if (!this.accountSaltPromise) this.accountSaltPromise = this.resolvePasswordSalt();
@@ -480,7 +480,7 @@ abstract class BaseClient {
         // One topic key per [password, topic] pair, plus org master keys.
         const ring = await Keyring.build({ passwords: [], topics: [], orgMasterKeys: this.orgMasterKeys });
         for (const [pw, topic] of this.topicPasswords) ring.add(await deriveKey(pw, topic));
-        // The account default key(s) — derived against the server salt — only
+        // The Personal Password key(s) — derived against the server salt — only
         // when asked (submissions need them; the events feed doesn't pay the fetch).
         if (opts.includePasswordSalt && this.defaultPassword !== undefined) {
           const passwordSalt = await this.accountSalt();
@@ -543,7 +543,7 @@ abstract class BaseClient {
   ): AsyncIterableIterator<Submission> {
     const IDLE = Symbol("idle");
     const keyring = await this.keyring(); // topic + org keys
-    // Submissions are encrypted under the account default key (account password +
+    // Submissions are encrypted under the Personal Password key (account password +
     // the server-issued password_salt), not a topic key — fold it in for this call.
     const supplied = await this.resolvedKeys();
     if (supplied.defaultKey !== undefined) keyring.add(supplied.defaultKey);
@@ -990,7 +990,7 @@ export type ClientConfig = CommonConfig & {
    *     topic key (decrypts that topic's content, and is the send default for
    *     it), and
    *   - at most one bare default-password string — your account password;
-   *     derives the account default key, which decrypts your submissions. It is
+   *     derives the Personal Password key, which decrypts your submissions. It is
    *     decryption-only — it never encrypts a send.
    * E.g. `"account-pw"` or `[["alerts-pw", "alerts"], "account-pw"]`. A per-send
    * `password` always overrides for that send. */
@@ -1034,7 +1034,7 @@ export class Client extends BaseClient {
   }
 
   /** Observe `Submission`s on this user's stream. `password` overrides the
-   * account default password used to decrypt them for this call (otherwise the
+   * Personal Password used to decrypt them for this call (otherwise the
    * configured default password is used); supply it when you didn't set one at
    * construction. */
   override submissions(
@@ -1059,7 +1059,7 @@ export class Client extends BaseClient {
   }
 
   /** The password to encrypt a send to `topic` with when none is passed per-send:
-   * the password paired with `topic`, or undefined. The account default password
+   * the password paired with `topic`, or undefined. The Personal Password
    * is decryption-only — it never encrypts a send. */
   private sendPassword(topic: string): string | undefined {
     const pair = this.topicPasswords.find(([, t]) => t === topic);
@@ -1094,9 +1094,9 @@ export class Client extends BaseClient {
     return { key: dk.symmetricKey, marker: { type: "personal", keyFingerprint: dk.fingerprint } };
   }
 
-  /** Encryption material for a topicless "note to self": derived from the account
+  /** Encryption material for a topicless self-send: derived from the account
    * default password + the server `password_salt` — the SAME key that decrypts
-   * your submissions, so a note-to-self round-trips to your own clients. Returns
+   * your submissions, so a self-send round-trips to your own clients. Returns
    * undefined (plaintext send) when no default password is configured. */
   private async selfSendEnc(): Promise<{ key: Uint8Array; marker: EncryptionMarker } | undefined> {
     // A supplied default key skips the whole derivation — and with it the
@@ -1120,11 +1120,11 @@ export class Client extends BaseClient {
    * per-recipient `Task` handles. `shared: true` opts into the single
    * shared task and returns a plain `Task`. With `password`, the body fields
    * are encrypted under the topic key (salt = topic value) before sending. */
-  // Note-to-self (personal Client only): OMIT `topic` to send to your OWN
+  // Self-send (personal Client only): OMIT `topic` to send to your OWN
   // devices. Always a single `Task` (there is one recipient — you), never a
   // group. Encrypted under the account key when a default password is
   // configured, else plaintext. `shared` is moot (one recipient) and `password`
-  // isn't accepted (a note-to-self uses the account key).
+  // isn't accepted (a self-send uses the account key).
   async sendTask(opts: SendOptions & { topic?: undefined; password?: undefined; shared?: boolean }): Promise<Task>;
   async sendTask(opts: { topic: string } & SendOptions & { password?: string } & { shared: true }): Promise<Task>;
   async sendTask(opts: { topic: string } & SendOptions & { password?: string } & { shared?: false }): Promise<TaskGroup>;
@@ -1134,7 +1134,7 @@ export class Client extends BaseClient {
   async sendTask(opts: { topic?: string } & SendOptions & { password?: string }): Promise<Task | TaskGroup> {
     const { topic, password, ...rest } = opts;
     if (topic === undefined && password !== undefined)
-      throw new Error("password requires a topic; a note-to-self is encrypted with the client's default password");
+      throw new Error("password requires a topic; a self-send is encrypted with the client's default password");
     const enc = topic === undefined ? await this.selfSendEnc() : await this.personalEnc(topic, password);
     const resp = await this.sendEncrypted(topic === undefined ? {} : { topic }, rest, enc);
     if (isTaskGroupResponse(resp)) return this.taskGroupHandle(resp, enc);
@@ -1149,7 +1149,7 @@ export class Client extends BaseClient {
    * notification is a lighter sibling of a task: a single text/choice/actions
    * input, no reply composer, no subtasks. Encryption works exactly like
    * `sendTask`. */
-  // Note-to-self (personal Client only): OMIT `topic` to notify your OWN
+  // Self-send (personal Client only): OMIT `topic` to notify your OWN
   // devices. Always a single `Notification`. Encryption mirrors `sendTask`.
   async sendNotification(opts: SendNotificationOptions & { topic?: undefined; password?: undefined; shared?: boolean }): Promise<Notification>;
   async sendNotification(opts: { topic: string } & SendNotificationOptions & { password?: string } & { shared: true }): Promise<Notification>;
@@ -1162,7 +1162,7 @@ export class Client extends BaseClient {
   ): Promise<Notification | NotificationGroup> {
     const { topic, password, ...rest } = opts;
     if (topic === undefined && password !== undefined)
-      throw new Error("password requires a topic; a note-to-self is encrypted with the client's default password");
+      throw new Error("password requires a topic; a self-send is encrypted with the client's default password");
     const enc = topic === undefined ? await this.selfSendEnc() : await this.personalEnc(topic, password);
     const resp = await this.sendNotificationEncrypted(topic === undefined ? {} : { topic }, rest, enc);
     if (isNotificationGroupResponse(resp)) return this.notificationGroupHandle(resp, enc);

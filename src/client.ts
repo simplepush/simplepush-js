@@ -10,7 +10,7 @@ import { Keyring, type OrgMasterKey } from "./keyring.js";
 import { streamEvents } from "./streams/events-stream.js";
 import { EventHub } from "./hub.js";
 import type { DownloadTransport } from "./downloads.js";
-import { Task, TaskGroup, Subtask, Notification, NotificationGroup, WatchedTask, WatchedTaskGroup, WatchedNotification, WatchedNotificationGroup, buildDecryptor, buildKeyResolver, type SendKey } from "./handles.js";
+import { Task, TaskGroup, Subtask, WatchedSubtask, Notification, NotificationGroup, WatchedTask, WatchedTaskGroup, WatchedNotification, WatchedNotificationGroup, buildDecryptor, buildKeyResolver, type SendKey } from "./handles.js";
 import { wrapSubmission, type Submission } from "./event-views.js";
 import { createTask } from "./tasks.js";
 import { mintIdempotencyKey } from "./retry.js";
@@ -710,6 +710,26 @@ abstract class BaseClient {
       groupId: args.groupId,
       createdAt: args.createdAt ?? "",
       instances,
+    });
+  }
+
+  /** Build a WATCH handle for a subtask from ids captured earlier — an
+   * append's `subtaskId` + `taskId` (the parent chain its events route under)
+   * — so `.inputs()` / `.replies()` can observe it from a FRESH process, off
+   * the one shared event stream. Passing `createdAt` lowers the hub's resume
+   * cursor to the append time, so the collection backfills the append→watch
+   * gap. Observe-only: no `cancel()` — that lives on the rich `Subtask` a
+   * handle append returns. Decryption works via this client's keyring. */
+  watchSubtask(args: { subtaskId: string; taskId: string; createdAt?: string }): WatchedSubtask {
+    const hub = this.hub();
+    hub.registerEntity(args.taskId, args.createdAt);
+    return new WatchedSubtask({
+      subtaskId: args.subtaskId,
+      parentTaskId: args.taskId,
+      createdAt: args.createdAt ?? "",
+      hub,
+      getKeyring: () => this.keyring(),
+      downloads: this.downloadTransport(),
     });
   }
 

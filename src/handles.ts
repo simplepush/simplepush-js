@@ -508,28 +508,21 @@ export class TaskGroup extends WatchedTaskGroup<Task> {
   }
 }
 
-/** Handle for a subtask appended to a task. `inputs()` / `replies()` are scoped
- * to this subtask within the parent's chain (one level deep — a subtask cannot
- * itself be appended to). Its events route under the parent task's id. */
-export class Subtask {
+/** READ-ONLY handle for observing a subtask by ids: `inputs()` / `replies()`
+ * scoped to this subtask within the parent's chain, routed under the parent
+ * task's id. Produced by `watchSubtask`; the rich `Subtask` an append returns
+ * extends it with `cancel()`. */
+export class WatchedSubtask {
   readonly subtaskId: string;
   readonly parentTaskId: string;
   readonly createdAt: string;
-  private readonly deps: HandleDeps;
-  private readonly cancelFn: CancelFn;
+  protected readonly deps: HandleDeps;
 
-  constructor(args: { subtaskId: string; parentTaskId: string; createdAt: string; cancel: CancelFn } & HandleDeps) {
+  constructor(args: { subtaskId: string; parentTaskId: string; createdAt: string } & HandleDeps) {
     this.subtaskId = args.subtaskId;
     this.parentTaskId = args.parentTaskId;
     this.createdAt = args.createdAt;
-    this.cancelFn = args.cancel;
     this.deps = { hub: args.hub, getKeyring: args.getKeyring, ...(args.sendKey ? { sendKey: args.sendKey } : {}), ...(args.downloads ? { downloads: args.downloads } : {}) };
-  }
-
-  /** Cancel this pending follow-up while the chain stays live. `supersededBy`
-   * must name a subtask of the SAME chain (requires `reason: "superseded"`). */
-  cancel(opts: CancelOptions = {}): Promise<void> {
-    return this.cancelFn(opts);
   }
 
   /** Yields `InputEvent`s for this subtask, then a terminal `subtaskCompleted`
@@ -571,6 +564,24 @@ export class Subtask {
       },
       opts,
     );
+  }
+}
+
+/** Handle for a subtask appended to a task (one level deep — a subtask cannot
+ * itself be appended to). The observe streams live on `WatchedSubtask`; this
+ * adds the sender capability. */
+export class Subtask extends WatchedSubtask {
+  private readonly cancelFn: CancelFn;
+
+  constructor(args: { subtaskId: string; parentTaskId: string; createdAt: string; cancel: CancelFn } & HandleDeps) {
+    super(args);
+    this.cancelFn = args.cancel;
+  }
+
+  /** Cancel this pending follow-up while the chain stays live. `supersededBy`
+   * must name a subtask of the SAME chain (requires `reason: "superseded"`). */
+  cancel(opts: CancelOptions = {}): Promise<void> {
+    return this.cancelFn(opts);
   }
 }
 

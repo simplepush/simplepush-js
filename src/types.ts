@@ -237,6 +237,10 @@ export type SendOptions = {
 
 export type CreateSubtaskJsonResponse = {
   subtaskId: string;
+  /** The parent task the subtask was appended under — the chain id its event
+   * streams route under (the append itself is addressed by the opaque token,
+   * so this is the caller's only way to learn it). */
+  taskId: string;
   createdAt: string;
   /** File attachments minted for this append (request order), `status =
    * uploading`. Empty when the append carried none. */

@@ -136,79 +136,6 @@ async function buildBody(
   };
 }
 
-/** Build a `CreateTaskRequest` for an org send whose body the caller POSTs itself
- * — e.g. the CLI's bearer endpoint (`/v1/org/tasks/json`), which `OrgClient`'s
- * Api-Key transport can't reach. Encrypts every user-visible field (tag, title,
- * content, links, and each input's description/default/options) under the org
- * master key and stamps the `{type:"org",v}` marker — the exact field set
- * `OrgClient.sendTask` produces, so callers don't reimplement it. For file
- * attachments, pass the metadata from `prepareFileAttachments` (encrypt with
- * `masterKey.key` to match the body fields), then drive the minted attachments
- * through `uploadFileAttachments` against the org bearer lifecycle endpoints
- * (`basePath: "v1/org/attachments"`). Pass `masterKey` undefined to send in the
- * clear. */
-export async function buildOrgTaskRequest(
-  target: OrgSendTarget,
-  opts: SendOptions,
-  masterKey: { key: Uint8Array; version: number } | undefined,
-  /** Body metadata of files to attach (from `prepareFileAttachments`). */
-  attachments: FileAttachmentUploadData[] = [],
-): Promise<CreateTaskRequest> {
-  const enc = masterKey
-    ? { key: masterKey.key, marker: { type: "org" as const, v: masterKey.version } }
-    : undefined;
-  // Minted at build time: a caller retrying the POST resends the same built
-  // body, so the backend replays instead of re-creating.
-  return { idempotencyKey: mintIdempotencyKey(), ...(await buildBody(target, opts, enc, attachments)) };
-}
-
-/** Notification sibling of `buildOrgTaskRequest`: build a `CreateNotificationRequest`
- * for an org send the caller POSTs itself (the CLI's `/v1/org/notifications/json`
- * bearer endpoint). Encrypts tag, title, content, any choice-option labels, and a
- * link media URL under the org master key and stamps the marker — the same field set
- * `OrgClient.sendNotification` produces. File media isn't supported on this path. */
-export async function buildOrgNotificationRequest(
-  target: OrgSendTarget,
-  opts: SendNotificationOptions,
-  media: NotificationMedia | undefined,
-  masterKey: { key: Uint8Array; version: number } | undefined,
-): Promise<CreateNotificationRequest> {
-  const enc = masterKey
-    ? { key: masterKey.key, marker: { type: "org" as const, v: masterKey.version } }
-    : undefined;
-  // buildNotificationBody encrypts the body fields but takes media pre-built, so
-  // encrypt a link URL here to match (file media carries no URL).
-  const builtMedia: NotificationMedia | undefined =
-    enc && media && media.type === "link"
-      ? { ...media, url: await encrypt(enc.key, media.url) }
-      : media;
-  return { idempotencyKey: mintIdempotencyKey(), ...(await buildNotificationBody(target, opts, enc, builtMedia)) };
-}
-
-/** Subtask sibling of `buildOrgTaskRequest`: build a `CreateSubtaskRequest` for an
- * org append the caller POSTs itself (the CLI's `/v1/org/subtasks/json` bearer
- * endpoint). Encrypts the subtask body under the org master key and stamps the
- * `{type:"org",v}` marker — the parent must be a task in the same org. Pass
- * `masterKey` undefined to send in the clear. For file attachments, pass the
- * metadata from `prepareFileAttachments` and drive the minted attachments through
- * `uploadFileAttachments` (`basePath: "v1/org/attachments"`), as with
- * `buildOrgTaskRequest`. */
-export async function buildOrgSubtaskRequest(
-  appendToken: string,
-  opts: SendSubtaskOptions,
-  masterKey: { key: Uint8Array; version: number } | undefined,
-  /** GROUP-kind tokens only: restrict the append to these member instances. */
-  instances?: string[],
-  /** Body metadata of files to attach (from `prepareFileAttachments`). */
-  attachments: FileAttachmentUploadData[] = [],
-): Promise<CreateSubtaskRequest> {
-  const enc = masterKey
-    ? { key: masterKey.key, marker: { type: "org" as const, v: masterKey.version } }
-    : undefined;
-  const data = { idempotencyKey: mintIdempotencyKey(), ...(await buildSubtaskData(opts, enc, attachments)) };
-  return { appendToken, data, ...(instances !== undefined ? { instances } : {}) };
-}
-
 /** Client-side validation for a notification `actions` input: at least one
  * action, each with a non-empty key + label, and unique keys. Mirrors the task
  * `validateInputs` action checks — once the labels are encrypted the backend
@@ -1206,8 +1133,8 @@ export type OrgClientConfig = CommonConfig & {
   /** Org Api-Key. Exactly one of `apiKey` / `bearerToken` must be given. */
   apiKey?: string;
   /** CLI admin-session bearer token — the interactive alternative to the
-   * Api-Key. Grants the same org-wide event stream and file downloads; sends
-   * still require the Api-Key and throw without one. */
+   * Api-Key. Grants the same org surface: sends, subtask appends, attachment
+   * uploads, the org-wide event stream, and file downloads. */
   bearerToken?: string;
   /** Org master keys (version -> 32-byte key) for decrypting org content.
    * Obtained out-of-band from the org's encryption vault; the SDK can't derive
@@ -1220,10 +1147,10 @@ export type OrgClientConfig = CommonConfig & {
 };
 
 /** Organization client, authenticated by the org Api-Key or a CLI admin
- * session (`bearerToken`). Streams org-wide events at
- * `/ws/v1/events/organization` (the org is derived from the credential) and
- * decrypts org content with the supplied `master_key`(s). A session-based
- * client cannot send: sends still need the Api-Key. */
+ * session (`bearerToken`) — both grant the full org surface: sends, subtask
+ * appends, attachment uploads, file downloads, and the org-wide event stream
+ * at `/ws/v1/events/organization` (the org is derived from the credential).
+ * Decrypts org content with the supplied `master_key`(s). */
 export class OrgClient extends BaseClient {
   readonly apiKey: string | undefined;
   readonly bearerToken: string | undefined;
@@ -1237,19 +1164,9 @@ export class OrgClient extends BaseClient {
     this.orgMasterKeys = normalizeOrgMasterKeys(config);
   }
 
-  /** The Api-Key specifically, for the few call sites that genuinely need that
-   * credential rather than any org credential. Sending does NOT: the backend
-   * accepts a session/OAuth bearer on the org send surface too, so it goes
-   * through `credentialHeaders()`. */
-  requireApiKey(): string {
-    if (!this.apiKey) throw new SimplepushError("this OrgClient is session-authenticated (bearerToken); this call requires an apiKey");
-    return this.apiKey;
-  }
-
-  /** The credential header for surfaces that accept either auth mode: sends,
-   * the events WS and the file-download endpoints (a CLI-session bearer or an
-   * OAuth org grant resolves to the same org identity as an Api-Key
-   * server-side). */
+  /** The credential header for every authenticated surface: sends, appends,
+   * attachment lifecycle, downloads, and the events WS all accept any org
+   * credential — the Api-Key or the CLI-session bearer. */
   private credentialHeaders(): Record<string, string> {
     return this.apiKey !== undefined ? { "Api-Key": this.apiKey } : { Authorization: `Bearer ${this.bearerToken}` };
   }
@@ -1309,6 +1226,30 @@ export class OrgClient extends BaseClient {
     const resp = await this.sendNotificationEncrypted(target, rest, enc);
     if (isNotificationGroupResponse(resp)) return this.notificationGroupHandle(resp, enc);
     return this.notificationHandle(resp, enc);
+  }
+
+  /** Append a subtask to an org task's chain, identified by its `appendToken`
+   * (returned at task creation — there is no fetch-by-id). Stateless: no `Task`
+   * handle required. The body is encrypted under the current master key
+   * (plaintext when the client holds no keys — must match the parent's
+   * encryption). `instances` restricts a group-token append to those member
+   * instances. Returns the created subtask's id + minted attachments. */
+  async appendSubtask(opts: { appendToken: string; instances?: string[] } & SendSubtaskOptions): Promise<CreateSubtaskResponse> {
+    const { appendToken, instances, ...rest } = opts;
+    if (!rest.content && !(rest.inputs && rest.inputs.length > 0)) {
+      throw new Error("Either content or inputs must be provided");
+    }
+    const enc = this.currentOrgKey();
+    const prepared = await prepareFileAttachments(rest.files, enc?.key);
+    const data = await buildSubtaskData(rest, enc, prepared.map((p) => p.meta));
+    const resp = await createSubtask({
+      baseUrl: this.baseUrl,
+      body: { appendToken, data, ...(instances !== undefined ? { instances } : {}) },
+      authHeaders: this.createAuthHeaders(),
+      fetch: this.fetchImpl,
+    });
+    await this.uploadAttachments(prepared, resp.attachments);
+    return resp;
   }
 }
 

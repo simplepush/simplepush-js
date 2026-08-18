@@ -87,8 +87,4 @@ describe("org client credentials", () => {
     expect(calls[0]?.headers["Api-Key"]).toBeUndefined();
   });
 
-  test("requireApiKey still throws where an Api-Key is genuinely needed", () => {
-    const client = new OrgClient({ bearerToken: "sess_abc" });
-    expect(() => client.requireApiKey()).toThrow(/requires an apiKey/);
-  });
 });

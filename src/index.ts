@@ -1,9 +1,6 @@
 export {
   Client,
   OrgClient,
-  buildOrgTaskRequest,
-  buildOrgNotificationRequest,
-  buildOrgSubtaskRequest,
   type ClientConfig,
   type OrgClientConfig,
   type PasswordsConfig,

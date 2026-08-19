@@ -10,7 +10,7 @@ import { Keyring, type OrgMasterKey } from "./keyring.js";
 import { streamEvents } from "./streams/events-stream.js";
 import { EventHub } from "./hub.js";
 import type { DownloadTransport } from "./downloads.js";
-import { Task, TaskGroup, Subtask, WatchedSubtask, Notification, NotificationGroup, WatchedTask, WatchedTaskGroup, WatchedNotification, WatchedNotificationGroup, buildDecryptor, buildKeyResolver, type SendKey } from "./handles.js";
+import { Task, TaskGroup, Subtask, WatchedSubtask, WatchedSubtaskGroup, Notification, NotificationGroup, WatchedTask, WatchedTaskGroup, WatchedNotification, WatchedNotificationGroup, buildDecryptor, buildKeyResolver, type SendKey } from "./handles.js";
 import { wrapSubmission, type Submission } from "./event-views.js";
 import { createTask } from "./tasks.js";
 import { mintIdempotencyKey } from "./retry.js";
@@ -730,6 +730,40 @@ abstract class BaseClient {
       hub,
       getKeyring: () => this.keyring(),
       downloads: this.downloadTransport(),
+    });
+  }
+
+  /** Build a WATCH handle for a GROUP append's sibling subtasks from ids
+   * captured earlier — the append's `groupId` + per-member `(taskId,
+   * subtaskId)` pairs (and the members' recipient identities if known) — so
+   * `.inputs()` / `.replies()` / `.activity()` can collect over the siblings
+   * from a FRESH process, off the one shared event stream. Passing `createdAt`
+   * (the APPEND time) lowers the hub's resume cursor so the collection
+   * backfills the append→watch gap. Observe-only; decryption works via this
+   * client's keyring. */
+  watchSubtaskGroup(args: {
+    groupId: string;
+    createdAt?: string;
+    members: ReadonlyArray<{ taskId: string; subtaskId: string; recipient?: { publicId: string; name?: string | null } }>;
+  }): WatchedSubtaskGroup {
+    const hub = this.hub();
+    const downloads = this.downloadTransport();
+    const instances = args.members.map((m) => {
+      hub.registerEntity(m.taskId, args.createdAt);
+      return new WatchedSubtask({
+        subtaskId: m.subtaskId,
+        parentTaskId: m.taskId,
+        createdAt: args.createdAt ?? "",
+        ...(m.recipient ? { recipient: { publicId: m.recipient.publicId, name: m.recipient.name ?? null } } : {}),
+        hub,
+        getKeyring: () => this.keyring(),
+        downloads,
+      });
+    });
+    return new WatchedSubtaskGroup({
+      groupId: args.groupId,
+      createdAt: args.createdAt ?? "",
+      instances,
     });
   }
 

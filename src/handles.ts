@@ -39,6 +39,11 @@ const REPLY_TYPES = new Set(["replyAppended", "taskDeclinedByRecipient"]);
 // chain-wide terminals (deleted/canceled/declined root) are entity-wide below.
 const SUBTASK_REPLY_TYPES = new Set(["replyAppended", "subtaskCanceled", "subtaskDeclinedByRecipient", "subtaskDeclined"]);
 const SUBTASK_REPLY_TERMINAL = new Set(["subtaskCanceled", "subtaskDeclined"]);
+// Combined "everything on the subtask" (inputs incl. the terminal
+// `subtaskCompleted`, AND replies) over one subscription. Nothing is terminal:
+// replies can keep arriving under a sticky composer after the inputs complete,
+// so the stream ends only chain-wide (deleted/canceled root) or on idle/signal.
+const SUBTASK_ACTIVITY_TYPES = new Set([...SUBTASK_INPUT_TYPES, ...SUBTASK_REPLY_TYPES]);
 
 /** Data-types that end a stream ENTITY-WIDE — they ignore subtask scope, so a
  * deleted, sender-canceled, or fully-declined root ends the chain's every
@@ -334,6 +339,23 @@ export type ActivityItem = ReplyItem | TaskInputItem;
  * tagged with the member `instance` it arrived on. */
 export type GroupActivity<I extends WatchedTask = WatchedTask> = { instance: I; item: ActivityItem; recipient?: TaskGroupRecipient };
 
+/** Item yielded by `WatchedSubtask.activity()`: an input event, the
+ * `subtaskCompleted`, a `Reply`, or a chain-wide marker. */
+export type SubtaskActivityItem = ReplyItem | SubtaskInputItem;
+
+/** An input event collected over a group append's sibling subtasks
+ * (`inputs()`), tagged with the sibling `instance` (and its member recipient)
+ * it arrived on. */
+export type GroupSubtaskInput<I extends WatchedSubtask = WatchedSubtask> = { instance: I; item: SubtaskInputItem; recipient?: TaskGroupRecipient };
+
+/** A reply collected over a group append's sibling subtasks (`replies()`),
+ * tagged with the sibling `instance` it arrived on. */
+export type GroupSubtaskReply<I extends WatchedSubtask = WatchedSubtask> = { instance: I; item: ReplyItem; recipient?: TaskGroupRecipient };
+
+/** A combined activity item collected over a group append's sibling subtasks
+ * (`activity()`), tagged with the sibling `instance` it arrived on. */
+export type GroupSubtaskActivity<I extends WatchedSubtask = WatchedSubtask> = { instance: I; item: SubtaskActivityItem; recipient?: TaskGroupRecipient };
+
 /** Merge every member instance's per-entity stream (`replies()` / `inputs()`,
  * via `substream`) over the ONE shared `EventHub` (each member id is already a
  * demux key there — no extra WS), tagging each yielded item with its
@@ -516,12 +538,16 @@ export class WatchedSubtask {
   readonly subtaskId: string;
   readonly parentTaskId: string;
   readonly createdAt: string;
+  /** Which member instance this sibling was appended under. Set on group-append
+   * members (the parent group's recipient); undefined on a single append. */
+  readonly recipient?: TaskGroupRecipient;
   protected readonly deps: HandleDeps;
 
-  constructor(args: { subtaskId: string; parentTaskId: string; createdAt: string } & HandleDeps) {
+  constructor(args: { subtaskId: string; parentTaskId: string; createdAt: string; recipient?: TaskGroupRecipient } & HandleDeps) {
     this.subtaskId = args.subtaskId;
     this.parentTaskId = args.parentTaskId;
     this.createdAt = args.createdAt;
+    if (args.recipient !== undefined) this.recipient = args.recipient;
     this.deps = { hub: args.hub, getKeyring: args.getKeyring, ...(args.sendKey ? { sendKey: args.sendKey } : {}), ...(args.downloads ? { downloads: args.downloads } : {}) };
   }
 
@@ -565,6 +591,29 @@ export class WatchedSubtask {
       opts,
     );
   }
+
+  /** Yields EVERYTHING happening on this subtask — input events, the
+   * `subtaskCompleted`, and `Reply`s — interleaved over one subscription.
+   * `subtaskCompleted` is yielded but does NOT end the stream (replies can
+   * follow under a sticky composer); ends chain-wide (`taskDeleted` /
+   * `taskCanceled` root) or after `idleMs` of silence. */
+  activity(opts: StreamOptions = {}): AsyncIterableIterator<SubtaskActivityItem> {
+    return streamEntity<SubtaskActivityItem>(
+      {
+        hub: this.deps.hub,
+        rootId: this.parentTaskId,
+        subtaskId: this.subtaskId,
+        getKeyring: this.deps.getKeyring,
+        sendKey: this.deps.sendKey,
+        downloads: this.deps.downloads,
+        want: SUBTASK_ACTIVITY_TYPES,
+        terminal: new Set(),
+        entityTerminals: ENTITY_TERMINALS,
+        wrap: (ev, dec, dl) => (dataType(ev) === "replyAppended" ? wrapReply(ev, dec, dl) : wrapInput(ev, dec, dl)),
+      },
+      opts,
+    );
+  }
 }
 
 /** Handle for a subtask appended to a task (one level deep — a subtask cannot
@@ -582,6 +631,46 @@ export class Subtask extends WatchedSubtask {
    * must name a subtask of the SAME chain (requires `reason: "superseded"`). */
   cancel(opts: CancelOptions = {}): Promise<void> {
     return this.cancelFn(opts);
+  }
+}
+
+/** READ-ONLY handle for observing a group append's sibling subtasks by ids:
+ * the merged member streams (`inputs()` / `replies()` / `activity()`), one
+ * `WatchedSubtask` per (member taskId, subtaskId) pair, demuxed off the ONE
+ * shared event hub. Produced by `watchSubtaskGroup`. `idleMs` on the streams
+ * is GROUP-WIDE silence; `replay` / `signal` forward to each member. */
+export class WatchedSubtaskGroup<I extends WatchedSubtask = WatchedSubtask> {
+  /** The parent task group the siblings were appended under (grptsk_); for a
+   * single-member roster this may be the synthetic parent task id. */
+  readonly groupId: string;
+  readonly createdAt: string;
+  /** One handle per appended sibling, roster-ordered. */
+  readonly instances: readonly I[];
+
+  constructor(args: { groupId: string; createdAt: string; instances: I[] }) {
+    this.groupId = args.groupId;
+    this.createdAt = args.createdAt;
+    this.instances = args.instances;
+  }
+
+  /** Collect input events across EVERY sibling subtask: an `InputEvent`, that
+   * sibling's terminal `subtaskCompleted` (full committed set), or a chain
+   * marker, tagged with the sibling `instance` it arrived on. */
+  inputs(opts: StreamOptions = {}): AsyncIterableIterator<GroupSubtaskInput<I>> {
+    return mergeGroupStream(this.instances, opts, (inst, o) => inst.inputs(o));
+  }
+
+  /** Collect replies across EVERY sibling subtask, tagged with the sibling
+   * `instance` (and member recipient) each reply arrived on. */
+  replies(opts: StreamOptions = {}): AsyncIterableIterator<GroupSubtaskReply<I>> {
+    return mergeGroupStream(this.instances, opts, (inst, o) => inst.replies(o));
+  }
+
+  /** Collect EVERYTHING across every sibling subtask — input events,
+   * completions, and replies — tagged per sibling. Nothing self-terminates
+   * (see `WatchedSubtask.activity`), so end with `idleMs` or a signal. */
+  activity(opts: StreamOptions = {}): AsyncIterableIterator<GroupSubtaskActivity<I>> {
+    return mergeGroupStream(this.instances, opts, (inst, o) => inst.activity(o));
   }
 }
 

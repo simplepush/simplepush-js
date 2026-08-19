@@ -37,7 +37,7 @@ export { fetchUserInfo, type UserInfoResponse } from "./user.js";
 export { isTaskGroupResponse, isSubtaskGroupResponse, isNotificationGroupResponse } from "./types.js";
 export { tryDecryptEventData, looksLikeCiphertext } from "./decrypt.js";
 export { deriveKey, encrypt, decrypt, decryptBytes, fingerprintFor, importKey, type DerivedKey } from "./crypto.js";
-export { Task, TaskGroup, Subtask, WatchedSubtask, Notification, NotificationGroup, WatchedTask, WatchedTaskGroup, WatchedNotification, WatchedNotificationGroup, type StreamOptions, type SendKey, type GroupReply, type GroupInput, type ActivityItem, type GroupActivity, type GroupNotification } from "./handles.js";
+export { Task, TaskGroup, Subtask, WatchedSubtask, WatchedSubtaskGroup, Notification, NotificationGroup, WatchedTask, WatchedTaskGroup, WatchedNotification, WatchedNotificationGroup, type StreamOptions, type SendKey, type GroupReply, type GroupInput, type ActivityItem, type GroupActivity, type SubtaskActivityItem, type GroupSubtaskInput, type GroupSubtaskReply, type GroupSubtaskActivity, type GroupNotification } from "./handles.js";
 export { EventHub, type EventHubConfig } from "./hub.js";
 export { routingId } from "./events.js";
 export { cancelTask, cancelSubtask, cancelTaskGroup } from "./cancel.js";

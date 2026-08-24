@@ -959,7 +959,7 @@ export type ClientConfig = CommonConfig & {
    * a client always carries a credential; it authenticates the event feed,
    * sends, and file downloads. */
   apiToken?: string;
-  /** OAuth access token (`spa_…`) carrying `send` / `events:read`, sent as
+  /** OAuth access token (`spa_…`) carrying `send` / `read`, sent as
    * `Authorization: Bearer`. Interchangeable with `apiToken` at the transport
    * level — the backend resolves either to the same personal principal — so an
    * OAuth-authenticated client can send, stream and download exactly like a

@@ -35,7 +35,27 @@ export { TypeFilter } from "./filter.js";
 export { Keyring, type KeyringInput, type OrgMasterKey } from "./keyring.js";
 export { fetchUserInfo, type UserInfoResponse } from "./user.js";
 export { isTaskGroupResponse, isSubtaskGroupResponse, isNotificationGroupResponse } from "./types.js";
-export { tryDecryptEventData, looksLikeCiphertext } from "./decrypt.js";
+export { tryDecryptEventData, tryDecryptTree, looksLikeCiphertext } from "./decrypt.js";
+export {
+  listTasks,
+  getTaskChain,
+  getTaskGroup,
+  listEvents,
+  listSubmissions,
+  allPages,
+  type TaskStatus,
+  type TaskSummary,
+  type TasksPage,
+  type TaskChain,
+  type TaskGroupRoster,
+  type EventsPage,
+  type SubmissionEntry,
+  type SubmissionsPage,
+  type ListTasksOptions,
+  type ListEventsOptions,
+  type ListSubmissionsOptions,
+  type ReadTransport,
+} from "./queries.js";
 export { deriveKey, encrypt, decrypt, decryptBytes, fingerprintFor, importKey, type DerivedKey } from "./crypto.js";
 export { Task, TaskGroup, Subtask, WatchedSubtask, WatchedSubtaskGroup, Notification, NotificationGroup, WatchedTask, WatchedTaskGroup, WatchedNotification, WatchedNotificationGroup, type StreamOptions, type SendKey, type GroupReply, type GroupInput, type ActivityItem, type GroupActivity, type SubtaskActivityItem, type GroupSubtaskInput, type GroupSubtaskReply, type GroupSubtaskActivity, type GroupNotification } from "./handles.js";
 export { EventHub, type EventHubConfig } from "./hub.js";

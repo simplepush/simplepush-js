@@ -10,6 +10,7 @@ import { Keyring, type OrgMasterKey } from "./keyring.js";
 import { streamEvents } from "./streams/events-stream.js";
 import { EventHub } from "./hub.js";
 import type { DownloadTransport } from "./downloads.js";
+import { getTaskChain, getTaskGroup, listEvents, listSubmissions, listTasks, type ListEventsOptions, type ListSubmissionsOptions, type ListTasksOptions, type ReadTransport, type TaskStatus } from "./queries.js";
 import { Task, TaskGroup, Subtask, WatchedSubtask, WatchedSubtaskGroup, Notification, NotificationGroup, WatchedTask, WatchedTaskGroup, WatchedNotification, WatchedNotificationGroup, buildDecryptor, buildKeyResolver, type SendKey } from "./handles.js";
 import { wrapSubmission, type Submission } from "./event-views.js";
 import { createTask } from "./tasks.js";
@@ -377,6 +378,43 @@ abstract class BaseClient {
    * an API-Token. Same credential the task create + download paths use. */
   protected httpAuthHeaders(): Record<string, string> {
     return this.downloadAuthHeaders();
+  }
+
+  /** Wire glue for the read endpoints, with this client's credential. */
+  private readTransport(): ReadTransport {
+    return { baseUrl: this.baseUrl, authHeaders: this.httpAuthHeaders(), fetch: this.fetchImpl };
+  }
+
+  /** Whether this client reads the org twins (`/v1/org/...`) or the personal
+   * endpoints. */
+  protected abstract readsOrgSurface(): boolean;
+
+  /** The task index: one page of root tasks (sent by this user, or delivered
+   * to the org's members), newest first, with per-status subtask counts.
+   * Personal freemium accounts get `subscription_required`. */
+  listTasks(opts: ListTasksOptions = {}) {
+    return listTasks(this.readTransport(), this.readsOrgSurface(), opts);
+  }
+
+  /** One task with every subtask appended to it, payloads verbatim. */
+  getTaskChain(taskId: string) {
+    return getTaskChain(this.readTransport(), taskId);
+  }
+
+  /** Per-recipient roster of an independent-mode group. */
+  getTaskGroup(groupId: string, opts: { status?: TaskStatus[] } = {}) {
+    return getTaskGroup(this.readTransport(), groupId, opts);
+  }
+
+  /** One page of the event stream's history over HTTP (the socket's replay
+   * twin), oldest first; cursor = version. */
+  listEvents(opts: ListEventsOptions = {}) {
+    return listEvents(this.readTransport(), this.readsOrgSurface(), opts);
+  }
+
+  /** One page of ad-hoc submissions, oldest first. */
+  listSubmissions(opts: ListSubmissionsOptions = {}) {
+    return listSubmissions(this.readTransport(), this.readsOrgSurface(), opts);
   }
   /** Credential header for file downloads (`API-Token` / `Api-Key`). Downloads
    * always authenticate — every client carries a credential — so they are
@@ -1014,6 +1052,10 @@ export class Client extends BaseClient {
     return this.apiToken !== undefined ? { "API-Token": this.apiToken } : { Authorization: `Bearer ${this.accessToken}` };
   }
 
+  protected readsOrgSurface(): boolean {
+    return false;
+  }
+
   /** Observe `Submission`s on this user's stream. `password` overrides the
    * Personal Password used to decrypt them for this call (otherwise the
    * configured default password is used); supply it when you didn't set one at
@@ -1223,6 +1265,10 @@ export class OrgClient extends BaseClient {
    * credential — the Api-Key or the CLI-session bearer. */
   private credentialHeaders(): Record<string, string> {
     return this.apiKey !== undefined ? { "Api-Key": this.apiKey } : { Authorization: `Bearer ${this.bearerToken}` };
+  }
+
+  protected readsOrgSurface(): boolean {
+    return true;
   }
 
   protected wsPath(): string {

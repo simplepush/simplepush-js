@@ -35,7 +35,8 @@ export { TypeFilter } from "./filter.js";
 export { Keyring, type KeyringInput, type OrgMasterKey } from "./keyring.js";
 export { fetchUserInfo, type UserInfoResponse } from "./user.js";
 export { isTaskGroupResponse, isSubtaskGroupResponse, isNotificationGroupResponse } from "./types.js";
-export { tryDecryptEventData, tryDecryptTree, looksLikeCiphertext } from "./decrypt.js";
+export { tryDecryptEventData } from "./decrypt.js";
+export { decryptTaskPayload, decryptTaskSummary, decryptSubmission, decryptEvent, type DecryptedWire } from "./decrypt-wire.js";
 export {
   listTasks,
   getTaskChain,

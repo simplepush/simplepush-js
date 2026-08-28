@@ -46,7 +46,7 @@ import type {
 } from "./types.js";
 import { isTaskGroupResponse, isSubtaskGroupResponse, isNotificationGroupResponse } from "./types.js";
 import { parseBaseUrl } from "./url.js";
-import { downloadFile, type FileDownload } from "./downloads.js";
+import { downloadFile, fileDownloadUrl, type FileDownload, type FileDownloadUrl } from "./downloads.js";
 import { fetchOrgMasterKeys, parseIntegrationToken } from "./integration.js";
 import { fetchUserInfo } from "./user.js";
 import type { WebSocketFactory } from "./ws.js";
@@ -417,6 +417,13 @@ abstract class BaseClient {
       const ring = await this.keyring({ includePasswordSalt: marker.type === "personal" });
       return ring.keyForMarker(marker);
     });
+  }
+
+  /** A presigned URL for one file by ids alone, with what the backend declares
+   * about it; the URL serves the stored bytes (ciphertext when sealed). */
+  fileDownloadUrl(scopeId: string, fileId: string): Promise<FileDownloadUrl> {
+    const t = this.readTransport();
+    return fileDownloadUrl({ baseUrl: t.baseUrl, authHeaders: t.authHeaders, fetchImpl: t.fetch }, scopeId, fileId);
   }
 
   /** One task by its tsk_ id, payload verbatim: status, inputs, answers, replies. */

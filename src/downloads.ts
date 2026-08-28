@@ -187,21 +187,25 @@ export function makeDownloadable(
  * and the key is held) plus what the backend declared about it. */
 export type FileDownload = {
   bytes: Uint8Array;
+  contentType: string;
+  /** Size of the STORED bytes (the ciphertext when sealed). */
+  size: number;
   filename?: string;
-  contentType?: string;
-  size?: number;
+  durationSeconds?: number;
   /** The marker the file was sealed under; absent for a plaintext file. */
   encryption?: EncryptionMarker;
 };
 
-type DownloadUrlResponse = PresignedDownloadWire & {
+type DownloadUrlResponse = {
+  presignedGetUrl?: string;
+  expiresAt: string;
+  contentType: string;
+  size: number;
+  checksumSha256: string;
   filename?: string;
-  contentType?: string;
-  size?: number;
-  checksumSha256?: string;
+  durationSeconds?: number;
   encryption?: EncryptionMarker;
 };
-type PresignedDownloadWire = { presignedGetUrl?: string; expiresAt?: string };
 
 /** The download-url route for a file addressed by ids alone: the containing
  * entity (`tsk_`/`sub_`/`sbm_`) and the file (`inp_` input upload, `rfl_`
@@ -217,12 +221,23 @@ function downloadUrlPath(scopeId: string, fileId: string): string {
   return `v1/${entity}/${encodeURIComponent(scopeId)}/${kind}/${encodeURIComponent(fileId)}/download-url`;
 }
 
-/** Downloads a file by ids alone, no handle or prior read: the download-url
- * response carries the stored file's own description (filename, content
- * type, size, checksum of the STORED bytes, encryption marker), so one
- * presign plus one fetch is everything. Verifies the checksum, decrypts when
- * a marker is present and `resolveKey` yields its key. */
-export async function downloadFile(t: DownloadTransport, scopeId: string, fileId: string, resolveKey: KeyResolver): Promise<FileDownload> {
+/** A presigned download by ids alone, with the stored file's own description
+ * (filename, content type, size, checksum of the STORED bytes, encryption
+ * marker) as the download-url response declares it. The URL lives ~5 minutes
+ * and serves the stored bytes: ciphertext when `encryption` is set. */
+export type FileDownloadUrl = {
+  url: string;
+  expiresAt: string;
+  contentType: string;
+  size: number;
+  checksumSha256: string;
+  filename?: string;
+  /** Audio only. */
+  durationSeconds?: number;
+  encryption?: EncryptionMarker;
+};
+
+export async function fileDownloadUrl(t: DownloadTransport, scopeId: string, fileId: string): Promise<FileDownloadUrl> {
   const path = downloadUrlPath(scopeId, fileId);
   const resp = await t.fetchImpl(new URL(path, t.baseUrl).toString(), { method: "POST", headers: t.authHeaders });
   if (!resp.ok) {
@@ -231,11 +246,18 @@ export async function downloadFile(t: DownloadTransport, scopeId: string, fileId
   }
   const meta = (await resp.json().catch(() => ({}))) as DownloadUrlResponse;
   if (!meta.presignedGetUrl) throw new DownloadError("backend returned no presigned URL");
-  const stored = await fetchBytes({ ...t, scope: "tasks", scopeId, resolveKey }, meta.presignedGetUrl);
-  if (meta.checksumSha256) {
-    const digest = await sha256Base64(stored);
-    if (digest !== meta.checksumSha256) throw new DownloadError(`checksum mismatch: expected ${meta.checksumSha256}, got ${digest}`);
-  }
+  const { presignedGetUrl, ...rest } = meta;
+  return { url: presignedGetUrl, ...rest };
+}
+
+/** Downloads a file by ids alone, no handle or prior read: one presign plus
+ * one fetch. Verifies the checksum, decrypts when a marker is present and
+ * `resolveKey` yields its key. */
+export async function downloadFile(t: DownloadTransport, scopeId: string, fileId: string, resolveKey: KeyResolver): Promise<FileDownload> {
+  const meta = await fileDownloadUrl(t, scopeId, fileId);
+  const stored = await fetchBytes({ ...t, scope: "tasks", scopeId, resolveKey }, meta.url);
+  const digest = await sha256Base64(stored);
+  if (digest !== meta.checksumSha256) throw new DownloadError(`checksum mismatch: expected ${meta.checksumSha256}, got ${digest}`);
   let bytes = stored;
   if (meta.encryption !== undefined) {
     const key = await resolveKey(meta.encryption);
@@ -248,9 +270,10 @@ export async function downloadFile(t: DownloadTransport, scopeId: string, fileId
   }
   return {
     bytes,
+    contentType: meta.contentType,
+    size: meta.size,
     ...(meta.filename !== undefined ? { filename: meta.filename } : {}),
-    ...(meta.contentType !== undefined ? { contentType: meta.contentType } : {}),
-    ...(meta.size !== undefined ? { size: meta.size } : {}),
+    ...(meta.durationSeconds !== undefined ? { durationSeconds: meta.durationSeconds } : {}),
     ...(meta.encryption !== undefined ? { encryption: meta.encryption } : {}),
   };
 }

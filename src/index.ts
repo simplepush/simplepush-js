@@ -16,6 +16,7 @@ export {
   WebSocketClosedError,
 } from "./errors.js";
 export { makeDownloadable, downloadFile, type FileDownload } from "./downloads.js";
+export { parseIntegrationToken, fetchOrgMasterKeys, type IntegrationToken } from "./integration.js";
 export type { Downloadable, PresignedDownload, DownloadContext, DownloadKind, DownloadScope, FileMeta, KeyResolver } from "./downloads.js";
 export {
   prepareFileAttachments,

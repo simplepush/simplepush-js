@@ -47,6 +47,7 @@ import type {
 import { isTaskGroupResponse, isSubtaskGroupResponse, isNotificationGroupResponse } from "./types.js";
 import { parseBaseUrl } from "./url.js";
 import { downloadFile, type FileDownload } from "./downloads.js";
+import { fetchOrgMasterKeys, parseIntegrationToken } from "./integration.js";
 import { fetchUserInfo } from "./user.js";
 import type { WebSocketFactory } from "./ws.js";
 
@@ -1306,6 +1307,26 @@ export type OrgClientConfig = CommonConfig & {
 export class OrgClient extends BaseClient {
   readonly apiKey: string | undefined;
   readonly bearerToken: string | undefined;
+
+  /** Builds an org client from an integration token (`spi_<credential>.<seed>`,
+   * from `sp integration create`): the credential half becomes the bearer, the
+   * seed half unwraps the org master keys the admin sealed to this
+   * integration, so sends are encrypted and reads decrypted whenever the org
+   * has encryption enabled. Fails loudly on a rejected credential or on key
+   * material this token cannot open. `orgEncryptionEnabled` tells whether any
+   * keys came back. */
+  static async fromIntegrationToken(token: string, config: CommonConfig = {}): Promise<OrgClient> {
+    const parsed = await parseIntegrationToken(token);
+    const baseUrl = parseBaseUrl(config.baseUrl ?? "https://api.simplepu.sh");
+    const orgMasterKeys = await fetchOrgMasterKeys(baseUrl, parsed, config.fetch ?? fetch);
+    return new OrgClient({ ...config, bearerToken: parsed.credential, ...(orgMasterKeys.length > 0 ? { orgMasterKeys } : {}) });
+  }
+
+  /** Whether this client holds org master keys, i.e. sends encrypt and org
+   * ciphertext decrypts. */
+  get orgEncryptionEnabled(): boolean {
+    return this.orgMasterKeys.length > 0;
+  }
 
   constructor(config: OrgClientConfig) {
     super(config);

@@ -471,7 +471,6 @@ export type CreateNotificationRequest = {
   encryption?: { type: "personal"; keyFingerprint: string } | { type: "org"; v: number };
   // iOS Critical Alert (bypasses silent mode / Do Not Disturb). Android ignores it.
   critical?: boolean;
-  contentFormat?: ContentFormat;
   /** Recipient-state model. Absent/false (the default) = INDEPENDENT: every
    * recipient gets their own notification instance under a group; `true` = the
    * single shared notification the first reply completes for everyone. */
@@ -482,7 +481,8 @@ export type CreateNotificationRequest = {
 
 /** Plaintext body for the high-level notification send helpers
  * (`Client.sendNotification`, `OrgClient.sendNotification`). Note: no
- * `autoCommit` and no `reply` composer — those are task-only. The send target is
+ * `autoCommit`, no `reply` composer and no `contentFormat` — those are
+ * task-only; a push renders its body as plain text. The send target is
  * passed alongside these on the method's options object. */
 export type SendNotificationOptions = {
   title?: string;
@@ -496,8 +496,6 @@ export type SendNotificationOptions = {
   image?: FileAttachment | string;
   audio?: FileAttachment | string;
   critical?: boolean;
-  /** Opt the body into Markdown rendering (plaintext marker; omit = plain). */
-  contentFormat?: ContentFormat;
   /** Recipient-state model: `true` = one single shared notification (all
    * recipients share one state; `sendNotification` returns a `Notification`);
    * absent/false (the default) = independent per-recipient instances

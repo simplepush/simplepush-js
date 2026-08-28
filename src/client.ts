@@ -174,7 +174,6 @@ async function buildNotificationBody(
     ...(opts.content !== undefined ? { content: await e(opts.content) } : {}),
     ...(media ? { media } : {}),
     ...(opts.critical ? { critical: true } : {}),
-    ...(opts.contentFormat !== undefined ? { contentFormat: opts.contentFormat } : {}),
     // Recipient-state model: sent explicitly only when opting into the
     // shared notification; absent = the backend's independent-instances default.
     ...(opts.shared ? { shared: true } : {}),

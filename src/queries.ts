@@ -29,6 +29,8 @@ export type TaskSummary = {
   /** Input KINDS on the root task, in display order (e.g. "text", "photo") —
    * what sort of answer it expects, without its content. */
   inputs: string[];
+  /** Attachment kinds on the root task, in order ("file", "link"). */
+  attachments: string[];
   /** The root task's own reply directive; the chain's effective mode may come
    * from a later subtask. */
   reply?: ReplyMode;

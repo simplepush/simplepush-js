@@ -131,6 +131,12 @@ export async function getTaskChain(t: ReadTransport, taskId: string): Promise<Ta
   return getJson<TaskChain>(t, `v1/tasks/${encodeURIComponent(taskId)}/chain`);
 }
 
+/** One subtask by its own id, payload verbatim. Authorisation is the root task's. */
+export type SubtaskPayloadWire = TaskChain["subtasks"][number]["subtask"];
+export async function getSubtask(t: ReadTransport, subtaskId: string): Promise<SubtaskPayloadWire> {
+  return getJson<SubtaskPayloadWire>(t, `v1/subtasks/${encodeURIComponent(subtaskId)}`);
+}
+
 export async function getTaskGroup(t: ReadTransport, groupId: string, opts: { status?: TaskStatus[] } = {}): Promise<TaskGroupRoster> {
   return getJson<TaskGroupRoster>(t, `v1/task-groups/${encodeURIComponent(groupId)}`, { status: opts.status });
 }

@@ -10,7 +10,7 @@ import { Keyring, type OrgMasterKey } from "./keyring.js";
 import { streamEvents } from "./streams/events-stream.js";
 import { EventHub } from "./hub.js";
 import type { DownloadTransport } from "./downloads.js";
-import { getTaskChain, getTaskGroup, listEvents, listSubmissions, listTasks, type ListEventsOptions, type ListSubmissionsOptions, type ListTasksOptions, type ReadTransport, type TaskStatus } from "./queries.js";
+import { getSubtask, getTaskChain, getTaskGroup, listEvents, listSubmissions, listTasks, type ListEventsOptions, type ListSubmissionsOptions, type ListTasksOptions, type ReadTransport, type TaskStatus } from "./queries.js";
 import { Task, TaskGroup, Subtask, WatchedSubtask, WatchedSubtaskGroup, Notification, NotificationGroup, WatchedTask, WatchedTaskGroup, WatchedNotification, WatchedNotificationGroup, buildDecryptor, buildKeyResolver, type SendKey } from "./handles.js";
 import { wrapSubmission, type Submission } from "./event-views.js";
 import { createTask } from "./tasks.js";
@@ -399,6 +399,11 @@ abstract class BaseClient {
   /** One task with every subtask appended to it, payloads verbatim. */
   getTaskChain(taskId: string) {
     return getTaskChain(this.readTransport(), taskId);
+  }
+
+  /** One subtask by its sub_ id, payload verbatim. */
+  getSubtask(subtaskId: string) {
+    return getSubtask(this.readTransport(), subtaskId);
   }
 
   /** Per-recipient roster of an independent-mode group. */

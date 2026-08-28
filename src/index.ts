@@ -40,6 +40,7 @@ export { decryptTaskPayload, decryptTaskSummary, decryptSubmission, decryptEvent
 export {
   listTasks,
   getTaskChain,
+  getSubtask,
   getTaskGroup,
   listEvents,
   listSubmissions,

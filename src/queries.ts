@@ -20,7 +20,11 @@ export type TaskStatus = "pending" | "completed" | "canceled" | "declined" | "ex
 export type TaskSummary = {
   taskId: string;
   title?: string;
+  /** The sender's tag; sealed like the title on an encrypted task. */
+  tag?: string;
   status: TaskStatus;
+  /** The topic value the task was sent to; absent for member, broadcast and self sends. */
+  topic?: string;
   topicId?: string;
   orgTopicId?: string;
   groupId?: string;

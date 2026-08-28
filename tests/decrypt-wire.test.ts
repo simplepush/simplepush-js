@@ -113,13 +113,15 @@ describe("decryptTaskPayload", () => {
 });
 
 describe("decryptTaskSummary", () => {
-  test("title only", async () => {
+  test("title and tag", async () => {
     const { value, undecryptable } = await decryptTaskSummary(
-      { taskId: "tsk_s", title: await e("Sealed title"), status: "pending", recipients: [], subtasks: {}, inputs: ["text"], encryption: MARKER },
+      { taskId: "tsk_s", title: await e("Sealed title"), tag: await e("safety"), topic: "alerts", status: "pending", recipients: [], subtasks: {}, inputs: ["text"], encryption: MARKER },
       ring,
     );
     expect(undecryptable).toBe(0);
     expect((value as any).title).toBe("Sealed title");
+    expect((value as any).tag).toBe("safety");
+    expect((value as any).topic).toBe("alerts");
     expect((value as any).inputs).toEqual(["text"]);
   });
 });

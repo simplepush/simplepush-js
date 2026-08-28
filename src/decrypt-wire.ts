@@ -192,7 +192,7 @@ export async function decryptTaskPayload(value: unknown, kr: Keyring): Promise<D
   return { value: out, undecryptable: st.undecryptable };
 }
 
-/** Decrypts a task index / group roster row: `title` is its only sealed field. */
+/** Decrypts a task index / group roster row: `title` and `tag` are its sealed fields. */
 export async function decryptTaskSummary(value: unknown, kr: Keyring): Promise<DecryptedWire> {
   const st: State = { undecryptable: 0 };
   const out = structuredClone(value);
@@ -201,6 +201,7 @@ export async function decryptTaskSummary(value: unknown, kr: Keyring): Promise<D
     const marker = markerOf(s.encryption);
     delete s.encryption;
     await decField(s, "title", marker, kr, st);
+    await decField(s, "tag", marker, kr, st);
   }
   return { value: out, undecryptable: st.undecryptable };
 }

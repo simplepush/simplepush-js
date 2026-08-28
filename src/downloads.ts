@@ -182,3 +182,75 @@ export function makeDownloadable(
     },
   };
 }
+
+/** One downloaded file: the bytes (checksum-verified, decrypted when sealed
+ * and the key is held) plus what the backend declared about it. */
+export type FileDownload = {
+  bytes: Uint8Array;
+  filename?: string;
+  contentType?: string;
+  size?: number;
+  /** The marker the file was sealed under; absent for a plaintext file. */
+  encryption?: EncryptionMarker;
+};
+
+type DownloadUrlResponse = PresignedDownloadWire & {
+  filename?: string;
+  contentType?: string;
+  size?: number;
+  checksumSha256?: string;
+  encryption?: EncryptionMarker;
+};
+type PresignedDownloadWire = { presignedGetUrl?: string; expiresAt?: string };
+
+/** The download-url route for a file addressed by ids alone: the containing
+ * entity (`tsk_`/`sub_`/`sbm_`) and the file (`inp_` input upload, `rfl_`
+ * reply file, `sbf_` submission file). */
+function downloadUrlPath(scopeId: string, fileId: string): string {
+  const entity = scopeId.startsWith("tsk_") ? "tasks" : scopeId.startsWith("sub_") ? "subtasks" : scopeId.startsWith("sbm_") ? "submissions" : undefined;
+  const kind = fileId.startsWith("inp_") ? "inputs" : fileId.startsWith("rfl_") ? "replies" : fileId.startsWith("sbf_") ? "files" : undefined;
+  if (entity === undefined) throw new DownloadError(`expected a tsk_, sub_ or sbm_ id as the file's scope, got '${scopeId}'`);
+  if (kind === undefined) throw new DownloadError(`expected an inp_, rfl_ or sbf_ file id, got '${fileId}'`);
+  if ((kind === "files") !== (entity === "submissions")) {
+    throw new DownloadError(kind === "files" ? `${fileId} is a submission file; its scope is an sbm_ id` : `${fileId} lives on a task chain; its scope is a tsk_ or sub_ id`);
+  }
+  return `v1/${entity}/${encodeURIComponent(scopeId)}/${kind}/${encodeURIComponent(fileId)}/download-url`;
+}
+
+/** Downloads a file by ids alone, no handle or prior read: the download-url
+ * response carries the stored file's own description (filename, content
+ * type, size, checksum of the STORED bytes, encryption marker), so one
+ * presign plus one fetch is everything. Verifies the checksum, decrypts when
+ * a marker is present and `resolveKey` yields its key. */
+export async function downloadFile(t: DownloadTransport, scopeId: string, fileId: string, resolveKey: KeyResolver): Promise<FileDownload> {
+  const path = downloadUrlPath(scopeId, fileId);
+  const resp = await t.fetchImpl(new URL(path, t.baseUrl).toString(), { method: "POST", headers: t.authHeaders });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new DownloadError(`download-url request failed: HTTP ${resp.status}: ${body}`, resp.status);
+  }
+  const meta = (await resp.json().catch(() => ({}))) as DownloadUrlResponse;
+  if (!meta.presignedGetUrl) throw new DownloadError("backend returned no presigned URL");
+  const stored = await fetchBytes({ ...t, scope: "tasks", scopeId, resolveKey }, meta.presignedGetUrl);
+  if (meta.checksumSha256) {
+    const digest = await sha256Base64(stored);
+    if (digest !== meta.checksumSha256) throw new DownloadError(`checksum mismatch: expected ${meta.checksumSha256}, got ${digest}`);
+  }
+  let bytes = stored;
+  if (meta.encryption !== undefined) {
+    const key = await resolveKey(meta.encryption);
+    if (!key) throw new DownloadError("file is encrypted but the client holds no matching key");
+    try {
+      bytes = await decryptBytes(key, stored);
+    } catch (err) {
+      throw new DownloadError(`failed to decrypt file: ${String(err)}`);
+    }
+  }
+  return {
+    bytes,
+    ...(meta.filename !== undefined ? { filename: meta.filename } : {}),
+    ...(meta.contentType !== undefined ? { contentType: meta.contentType } : {}),
+    ...(meta.size !== undefined ? { size: meta.size } : {}),
+    ...(meta.encryption !== undefined ? { encryption: meta.encryption } : {}),
+  };
+}

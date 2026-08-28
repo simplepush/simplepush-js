@@ -46,6 +46,7 @@ import type {
 } from "./types.js";
 import { isTaskGroupResponse, isSubtaskGroupResponse, isNotificationGroupResponse } from "./types.js";
 import { parseBaseUrl } from "./url.js";
+import { downloadFile, type FileDownload } from "./downloads.js";
 import { fetchUserInfo } from "./user.js";
 import type { WebSocketFactory } from "./ws.js";
 
@@ -404,6 +405,17 @@ abstract class BaseClient {
   /** One subtask by its sub_ id, payload verbatim. */
   getSubtask(subtaskId: string) {
     return getSubtask(this.readTransport(), subtaskId);
+  }
+
+  /** Downloads one file by ids alone — the containing tsk_/sub_/sbm_ id and
+   * the inp_/rfl_/sbf_ file id — checksum-verified and decrypted when this
+   * client holds the file's key. */
+  async downloadFile(scopeId: string, fileId: string): Promise<FileDownload> {
+    const t = this.readTransport();
+    return downloadFile({ baseUrl: t.baseUrl, authHeaders: t.authHeaders, fetchImpl: t.fetch }, scopeId, fileId, async (marker) => {
+      const ring = await this.keyring({ includePasswordSalt: marker.type === "personal" });
+      return ring.keyForMarker(marker);
+    });
   }
 
   /** One task by its tsk_ id, payload verbatim: status, inputs, answers, replies. */

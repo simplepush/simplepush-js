@@ -133,6 +133,24 @@ export async function getTaskChain(t: ReadTransport, taskId: string): Promise<Ta
   return getJson<TaskChain>(t, `v1/tasks/${encodeURIComponent(taskId)}/chain`);
 }
 
+/** One task by its own id, payload verbatim (status, inputs, answers, replies). */
+export type TaskPayloadWire = TaskChain["task"];
+export async function getTask(t: ReadTransport, taskId: string): Promise<TaskPayloadWire> {
+  return getJson<TaskPayloadWire>(t, `v1/tasks/${encodeURIComponent(taskId)}`);
+}
+
+/** One notification by its own id, payload verbatim; `reply` holds the
+ * recipient's answer once it exists. */
+export type NotificationPayloadWire = Record<string, unknown> & {
+  status: string;
+  encryption?: EncryptionMarker;
+  input?: { type: string };
+  reply?: Record<string, unknown> & { type: string };
+};
+export async function getNotification(t: ReadTransport, notificationId: string): Promise<NotificationPayloadWire> {
+  return getJson<NotificationPayloadWire>(t, `v1/notifications/${encodeURIComponent(notificationId)}`);
+}
+
 /** One subtask by its own id, payload verbatim. Authorisation is the root task's. */
 export type SubtaskPayloadWire = TaskChain["subtasks"][number]["subtask"];
 export async function getSubtask(t: ReadTransport, subtaskId: string): Promise<SubtaskPayloadWire> {

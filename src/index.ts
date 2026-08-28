@@ -42,6 +42,8 @@ export {
   listTasks,
   getTaskChain,
   getSubtask,
+  getTask,
+  getNotification,
   getTaskGroup,
   listEvents,
   listSubmissions,

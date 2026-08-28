@@ -10,7 +10,7 @@ import { Keyring, type OrgMasterKey } from "./keyring.js";
 import { streamEvents } from "./streams/events-stream.js";
 import { EventHub } from "./hub.js";
 import type { DownloadTransport } from "./downloads.js";
-import { getSubtask, getTaskChain, getTaskGroup, listEvents, listSubmissions, listTasks, type ListEventsOptions, type ListSubmissionsOptions, type ListTasksOptions, type ReadTransport, type TaskStatus } from "./queries.js";
+import { getNotification, getSubtask, getTask, getTaskChain, getTaskGroup, listEvents, listSubmissions, listTasks, type ListEventsOptions, type ListSubmissionsOptions, type ListTasksOptions, type ReadTransport, type TaskStatus } from "./queries.js";
 import { Task, TaskGroup, Subtask, WatchedSubtask, WatchedSubtaskGroup, Notification, NotificationGroup, WatchedTask, WatchedTaskGroup, WatchedNotification, WatchedNotificationGroup, buildDecryptor, buildKeyResolver, type SendKey } from "./handles.js";
 import { wrapSubmission, type Submission } from "./event-views.js";
 import { createTask } from "./tasks.js";
@@ -404,6 +404,45 @@ abstract class BaseClient {
   /** One subtask by its sub_ id, payload verbatim. */
   getSubtask(subtaskId: string) {
     return getSubtask(this.readTransport(), subtaskId);
+  }
+
+  /** One task by its tsk_ id, payload verbatim: status, inputs, answers, replies. */
+  getTask(taskId: string) {
+    return getTask(this.readTransport(), taskId);
+  }
+
+  /** One notification by its ntf_ id, payload verbatim. */
+  getNotification(notificationId: string) {
+    return getNotification(this.readTransport(), notificationId);
+  }
+
+  /** Cancels a task by id, no handle needed. A `note` is sealed under the
+   * task's own key when this client holds it; otherwise it travels plaintext. */
+  async cancelTask(taskId: string, opts: CancelOptions = {}): Promise<void> {
+    const enc = opts.note !== undefined ? await this.encryptionFor((await this.getTask(taskId)).encryption) : undefined;
+    await this.cancelTaskFromHandle(taskId, opts, enc);
+  }
+
+  /** Cancels a subtask by id; the note is sealed under the subtask's key when held. */
+  async cancelSubtask(subtaskId: string, opts: CancelOptions = {}): Promise<void> {
+    const enc = opts.note !== undefined ? await this.encryptionFor((await this.getSubtask(subtaskId)).encryption) : undefined;
+    await this.cancelSubtaskFromHandle(subtaskId, opts, enc);
+  }
+
+  /** Cancels every pending instance of a group by id; the note is sealed
+   * under the instances' key (they share one send) when held. */
+  async cancelTaskGroup(groupId: string, opts: CancelOptions = {}): Promise<CancelGroupResult> {
+    const enc = opts.note !== undefined ? await this.encryptionFor((await this.getTaskGroup(groupId)).tasks[0]?.encryption) : undefined;
+    return this.cancelGroupFromHandle(groupId, opts, enc);
+  }
+
+  /** The key this client holds for a marker, paired with the marker, or
+   * undefined when the target is plaintext or the key is not held. */
+  private async encryptionFor(marker: EncryptionMarker | undefined): Promise<{ key: Uint8Array; marker: EncryptionMarker } | undefined> {
+    if (marker === undefined) return undefined;
+    const ring = await this.keyring({ includePasswordSalt: marker.type === "personal" });
+    const key = ring.keyForMarker(marker);
+    return key ? { key, marker } : undefined;
   }
 
   /** Per-recipient roster of an independent-mode group. */

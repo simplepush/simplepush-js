@@ -15,7 +15,8 @@ export {
   SimplepushError,
   WebSocketClosedError,
 } from "./errors.js";
-export type { Downloadable, PresignedDownload } from "./downloads.js";
+export { makeDownloadable } from "./downloads.js";
+export type { Downloadable, PresignedDownload, DownloadContext, DownloadKind, DownloadScope, FileMeta, KeyResolver } from "./downloads.js";
 export {
   prepareFileAttachments,
   uploadFileAttachments,

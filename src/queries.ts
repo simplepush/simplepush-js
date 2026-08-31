@@ -89,13 +89,49 @@ export type ListEventsOptions = {
   type?: string[];
   since?: string;
   until?: string;
-  /** Actor: `usr_` id (or member name on an org client). */
+  /** Who wrote it: a `usr_` id, an org member's name, or (personal) the name
+   * of someone in the caller's own activity. Sent as `member` on the org
+   * surface and `person` on the personal one. */
   member?: string;
   limit?: number;
   cursor?: string;
 };
 
+/** `member` applies to the org surface only: a personal account's submissions
+ * are all its own, so the personal endpoint has no person filter. */
 export type ListSubmissionsOptions = Omit<ListEventsOptions, "type">;
+
+/** What a search hit is: the unit of text that matched. */
+export type SearchKind = "task" | "subtask" | "answer" | "reply" | "notification" | "notification_answer" | "submission";
+
+/** One full-text hit. `ref` is the wire id the hit lives on: a `tsk_` / `sub_`
+ * task for task, answer and reply hits, `grptsk_` for the shared text of an
+ * independent-mode group send, `ntf_` for a notification and its answer,
+ * `sbm_` for a submission. `snippet` brackets the matching words. */
+export type SearchHit = {
+  kind: SearchKind;
+  ref: string;
+  title?: string;
+  /** Who wrote the unit (`usr_` id), when known. */
+  actor?: string;
+  createdAt: string;
+  score: number;
+  snippet: string;
+};
+
+export type SearchResponse = { hits: SearchHit[] };
+
+export type SearchOptions = {
+  /** Only these hit kinds. */
+  kind?: SearchKind[];
+  since?: string;
+  until?: string;
+  /** Author: a `usr_` id, an org member's name, or (personal) the name of
+   * someone appearing in the caller's own activity. */
+  member?: string;
+  /** Best `limit` hits; default 20, at most 100. */
+  limit?: number;
+};
 
 /** Wire glue for the read functions: where, with which credential, and how. */
 export type ReadTransport = {
@@ -126,7 +162,7 @@ export async function listTasks(t: ReadTransport, org: boolean, opts: ListTasksO
     since: opts.since,
     until: opts.until,
     topic: opts.topic,
-    member: opts.member,
+    ...(opts.member !== undefined ? { [org ? "member" : "person"]: opts.member } : {}),
     group: opts.group,
     limit: opts.limit,
     cursor: opts.cursor,
@@ -170,7 +206,7 @@ export async function listEvents(t: ReadTransport, org: boolean, opts: ListEvent
     type: opts.type,
     since: opts.since,
     until: opts.until,
-    member: opts.member,
+    ...(opts.member !== undefined ? { [org ? "member" : "person"]: opts.member } : {}),
     limit: opts.limit,
     cursor: opts.cursor,
   });
@@ -180,9 +216,24 @@ export async function listSubmissions(t: ReadTransport, org: boolean, opts: List
   return getJson<SubmissionsPage>(t, org ? "v1/org/submissions" : "v1/submissions", {
     since: opts.since,
     until: opts.until,
-    member: opts.member,
+    ...(opts.member !== undefined ? { [org ? "member" : "person"]: opts.member } : {}),
     limit: opts.limit,
     cursor: opts.cursor,
+  });
+}
+
+/** Full-text search over what the organization (or the personal sender)
+ * holds: tasks, answers, replies, notifications and their answers,
+ * submissions. Plaintext records only. Words match literally, plus by stem
+ * in each language the organization configured. */
+export async function search(t: ReadTransport, org: boolean, query: string, opts: SearchOptions = {}): Promise<SearchResponse> {
+  return getJson<SearchResponse>(t, org ? "v1/org/search" : "v1/search", {
+    q: query,
+    kind: opts.kind,
+    since: opts.since,
+    until: opts.until,
+    ...(opts.member !== undefined ? { [org ? "member" : "person"]: opts.member } : {}),
+    limit: opts.limit,
   });
 }
 

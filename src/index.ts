@@ -48,6 +48,7 @@ export {
   getTaskGroup,
   listEvents,
   listSubmissions,
+  search,
   allPages,
   type TaskStatus,
   type TaskSummary,
@@ -60,6 +61,10 @@ export {
   type ListTasksOptions,
   type ListEventsOptions,
   type ListSubmissionsOptions,
+  type SearchKind,
+  type SearchHit,
+  type SearchResponse,
+  type SearchOptions,
   type ReadTransport,
 } from "./queries.js";
 export { deriveKey, encrypt, decrypt, decryptBytes, fingerprintFor, importKey, type DerivedKey } from "./crypto.js";

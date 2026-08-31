@@ -10,7 +10,7 @@ import { Keyring, type OrgMasterKey } from "./keyring.js";
 import { streamEvents } from "./streams/events-stream.js";
 import { EventHub } from "./hub.js";
 import type { DownloadTransport } from "./downloads.js";
-import { getNotification, getSubtask, getTask, getTaskChain, getTaskGroup, listEvents, listSubmissions, listTasks, type ListEventsOptions, type ListSubmissionsOptions, type ListTasksOptions, type ReadTransport, type TaskStatus } from "./queries.js";
+import { getNotification, getSubtask, getTask, getTaskChain, getTaskGroup, listEvents, listSubmissions, listTasks, search, type ListEventsOptions, type ListSubmissionsOptions, type SearchOptions, type ListTasksOptions, type ReadTransport, type TaskStatus } from "./queries.js";
 import { Task, TaskGroup, Subtask, WatchedSubtask, WatchedSubtaskGroup, Notification, NotificationGroup, WatchedTask, WatchedTaskGroup, WatchedNotification, WatchedNotificationGroup, buildDecryptor, buildKeyResolver, type SendKey } from "./handles.js";
 import { wrapSubmission, type Submission } from "./event-views.js";
 import { createTask } from "./tasks.js";
@@ -478,6 +478,12 @@ abstract class BaseClient {
   /** One page of ad-hoc submissions, oldest first. */
   listSubmissions(opts: ListSubmissionsOptions = {}) {
     return listSubmissions(this.readTransport(), this.readsOrgSurface(), opts);
+  }
+
+  /** Full-text search over what this client can read (the organization's
+   * records, or what the personal account sent and submitted). */
+  search(query: string, opts: SearchOptions = {}) {
+    return search(this.readTransport(), this.readsOrgSurface(), query, opts);
   }
   /** Credential header for file downloads (`API-Token` / `Api-Key`). Downloads
    * always authenticate — every client carries a credential — so they are

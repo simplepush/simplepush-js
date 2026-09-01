@@ -213,6 +213,8 @@ export type SendOptions = {
   /** Local files to upload as file attachments (uploaded after the task is
    * created; encrypted under the send key when the send is encrypted). */
   files?: FileAttachment[];
+  /** Default false: the task renders as a form with one Submit for all
+   * inputs; true commits each input as it is filled. */
   autoCommit?: boolean;
   reply?: ReplyMode;
   /** Opt the body into Markdown rendering on the recipient. Plaintext marker
@@ -345,6 +347,7 @@ export type SendSubtaskOptions = {
   /** Local files to upload as file attachments on the subtask (encrypted under
    * the parent's key when the chain is encrypted). */
   files?: FileAttachment[];
+  /** Default false: one Submit for all inputs; true commits each as filled. */
   autoCommit?: boolean;
   critical?: boolean;
   reply?: ReplyMode;

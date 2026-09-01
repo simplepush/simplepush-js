@@ -124,7 +124,7 @@ async function buildBody(
     inputs: opts.inputs ? await Promise.all(opts.inputs.map((i) => (enc ? encryptInput(i, enc.key) : i))) : [],
     links: opts.links ? await Promise.all(opts.links.map((u) => e(u))) : [],
     files,
-    autoCommit: opts.autoCommit ?? true,
+    autoCommit: opts.autoCommit ?? false,
     ...(opts.reply !== undefined ? { reply: opts.reply } : {}),
     // Plaintext marker — never encrypted, so the recipient can pick the renderer.
     ...(opts.contentFormat !== undefined ? { contentFormat: opts.contentFormat } : {}),
@@ -210,7 +210,7 @@ async function buildSubtaskData(
     inputs: opts.inputs ? await Promise.all(opts.inputs.map((i) => (enc ? encryptInput(i, enc.key) : i))) : [],
     links: opts.links ? await Promise.all(opts.links.map((u) => e(u))) : [],
     files,
-    autoCommit: opts.autoCommit ?? true,
+    autoCommit: opts.autoCommit ?? false,
     ...(opts.critical ? { critical: true } : {}),
     ...(opts.reply !== undefined ? { reply: opts.reply } : {}),
     ...(opts.contentFormat !== undefined ? { contentFormat: opts.contentFormat } : {}),

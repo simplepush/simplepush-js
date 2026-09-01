@@ -53,6 +53,9 @@ export type TaskChain = {
   task: Record<string, unknown> & { taskId: string; status: TaskStatus; encryption?: EncryptionMarker };
   createdAt: string;
   subtasks: { subtask: Record<string, unknown> & { subtaskId: string; status: TaskStatus; encryption?: EncryptionMarker }; createdAt: string }[];
+  /** The independent-mode group (`grptsk_`) this instance was sent as part
+   * of, when there is one — the handle for the group roster read. */
+  groupId?: string;
 };
 
 export type TaskGroupRoster = { groupId: string; tasks: TaskSummary[] };

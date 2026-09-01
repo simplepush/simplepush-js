@@ -480,9 +480,10 @@ abstract class BaseClient {
     return listSubmissions(this.readTransport(), this.readsOrgSurface(), opts);
   }
 
-  /** Full-text search over what this client can read (the organization's
-   * records, or what the personal account sent and submitted). */
-  search(query: string, opts: SearchOptions = {}) {
+  /** Full-text and location search over what this client can read (the
+   * organization's records, or what the personal account sent and
+   * submitted). At least one of `query` and `opts.near` is required. */
+  search(query: string | undefined, opts: SearchOptions = {}) {
     return search(this.readTransport(), this.readsOrgSurface(), query, opts);
   }
   /** Credential header for file downloads (`API-Token` / `Api-Key`). Downloads

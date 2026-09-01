@@ -104,10 +104,20 @@ export type ListSubmissionsOptions = Omit<ListEventsOptions, "type">;
 /** What a search hit is: the unit of text that matched. */
 export type SearchKind = "task" | "subtask" | "answer" | "reply" | "notification" | "notification_answer" | "submission";
 
-/** One full-text hit. `ref` is the wire id the hit lives on: a `tsk_` / `sub_`
+/** Where a hit happened, present when the search had an area filter (`near`
+ * or `within`): a point of the hit inside the area. `distanceMeters` is
+ * measured from the `near` center; absent on a polygon (`within`) search. */
+export type SearchHitLocation = {
+  latitude: number;
+  longitude: number;
+  distanceMeters?: number;
+};
+
+/** One search hit. `ref` is the wire id the hit lives on: a `tsk_` / `sub_`
  * task for task, answer and reply hits, `grptsk_` for the shared text of an
  * independent-mode group send, `ntf_` for a notification and its answer,
- * `sbm_` for a submission. `snippet` brackets the matching words. */
+ * `sbm_` for a submission. `snippet` brackets the matching words (absent on a
+ * location-only hit). */
 export type SearchHit = {
   kind: SearchKind;
   ref: string;
@@ -116,12 +126,23 @@ export type SearchHit = {
   actor?: string;
   createdAt: string;
   score: number;
-  snippet: string;
+  snippet?: string;
+  location?: SearchHitLocation;
 };
 
 export type SearchResponse = { hits: SearchHit[] };
 
 export type SearchOptions = {
+  /** Only hits carrying a point within `radiusMeters` of this WGS84 center.
+   * With a query, text hits are kept when their task/submission carries an
+   * in-radius point; without one, the points themselves are the hits,
+   * nearest first. `radiusMeters` is required alongside `near` (1..1000000). */
+  near?: { latitude: number; longitude: number };
+  radiusMeters?: number;
+  /** Only hits carrying a point inside this polygon (3..50 WGS84 corners).
+   * Mutually exclusive with `near`/`radiusMeters`; polygon hits carry no
+   * distance and order by recency. */
+  within?: { latitude: number; longitude: number }[];
   /** Only these hit kinds. */
   kind?: SearchKind[];
   since?: string;
@@ -222,13 +243,17 @@ export async function listSubmissions(t: ReadTransport, org: boolean, opts: List
   });
 }
 
-/** Full-text search over what the organization (or the personal sender)
- * holds: tasks, answers, replies, notifications and their answers,
+/** Full-text and location search over what the organization (or the personal
+ * sender) holds: tasks, answers, replies, notifications and their answers,
  * submissions. Plaintext records only. Words match literally, plus by stem
- * in each language the organization configured. */
-export async function search(t: ReadTransport, org: boolean, query: string, opts: SearchOptions = {}): Promise<SearchResponse> {
+ * in each language the organization configured; `opts.near` filters by geographic radius instead of or on top of the query
+ * (at least one of the two is required). */
+export async function search(t: ReadTransport, org: boolean, query: string | undefined, opts: SearchOptions = {}): Promise<SearchResponse> {
   return getJson<SearchResponse>(t, org ? "v1/org/search" : "v1/search", {
     q: query,
+    ...(opts.near !== undefined ? { near: `${opts.near.latitude},${opts.near.longitude}` } : {}),
+    radius: opts.radiusMeters,
+    ...(opts.within !== undefined ? { within: opts.within.map((p) => `${p.latitude},${p.longitude}`).join(";") } : {}),
     kind: opts.kind,
     since: opts.since,
     until: opts.until,

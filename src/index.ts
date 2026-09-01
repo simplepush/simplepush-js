@@ -63,6 +63,7 @@ export {
   type ListSubmissionsOptions,
   type SearchKind,
   type SearchHit,
+  type SearchHitLocation,
   type SearchResponse,
   type SearchOptions,
   type ReadTransport,

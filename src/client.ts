@@ -275,6 +275,21 @@ type CommonConfig = {
  * submissions; decryption-only, never a send password). */
 export type PasswordsConfig = string | Array<[string, string] | string>;
 
+/** Options of `submissions()`: `since` (ISO 8601) resumes from that point,
+ * backfilling earlier submissions; `idleMs` ends the stream after that many ms
+ * of silence; `signal` cancels it. */
+export type SubmissionsOptions = { signal?: AbortSignal; idleMs?: number; since?: string };
+
+/** Passwords for one call on a personal `Client` — the receive-side twin of a
+ * per-send `password`. Same shape as the constructor's `passwords`: `[password,
+ * topic]` pairs and/or one bare Personal Password string. The keys derived from
+ * them are held by that call alone, layered over the client's keyring. */
+export type CallPasswords = { passwords?: PasswordsConfig };
+
+/** The call scope of an `OrgClient`: org content decrypts with the master keys
+ * configured on the client, so no method takes per-call passwords. */
+export type NoCallPasswords = Record<never, never>;
+
 /** A personal key supplied directly: raw 32 bytes, or the base64 the app's key
  * export produces. */
 export type PersonalKeyInput = string | Uint8Array;
@@ -322,7 +337,10 @@ function parsePasswords(passwords: PasswordsConfig | undefined): {
   return { topicPasswords, defaultPassword };
 }
 
-abstract class BaseClient {
+/** `Scope` is what a method accepts on top of its own options to decrypt or
+ * seal for that call: `CallPasswords` on a personal `Client`, nothing on an
+ * `OrgClient`. */
+abstract class BaseClient<Scope extends object> {
   readonly baseUrl: URL;
   readonly webSocketFactory: WebSocketFactory | undefined;
   readonly fetchImpl: typeof fetch;
@@ -352,6 +370,8 @@ abstract class BaseClient {
   private readonly extraKeys: DerivedKey[] = [];
 
   private keyringPromise: Promise<Keyring> | null = null;
+  private personalKeyPromise: Promise<DerivedKey | undefined> | null = null;
+  private keyringWithPersonalKeyPromise: Promise<Keyring> | null = null;
   private accountSaltPromise: Promise<string | undefined> | null = null;
   private hubInstance: EventHub | null = null;
 
@@ -379,6 +399,16 @@ abstract class BaseClient {
    * an API-Token. Same credential the task create + download paths use. */
   protected httpAuthHeaders(): Record<string, string> {
     return this.downloadAuthHeaders();
+  }
+
+  /** The keyring for one call: this client's keys plus whatever `scope`
+   * supplies for the call, without touching the shared ring. */
+  protected abstract scopedKeyring(scope: Scope, opts?: { includePasswordSalt?: boolean }): Promise<Keyring>;
+
+  /** A handle's keyring: built lazily on first use, once per handle. */
+  protected keyringGetter(scope: Scope, opts: { includePasswordSalt?: boolean }): () => Promise<Keyring> {
+    let ring: Promise<Keyring> | undefined;
+    return () => (ring ??= this.scopedKeyring(scope, opts));
   }
 
   /** Wire glue for the read endpoints, with this client's credential. */
@@ -409,11 +439,11 @@ abstract class BaseClient {
 
   /** Downloads one file by ids alone — the containing tsk_/sub_/sbm_ id and
    * the inp_/rfl_/sbf_ file id — checksum-verified and decrypted when this
-   * client holds the file's key. */
-  async downloadFile(scopeId: string, fileId: string): Promise<FileDownload> {
+   * client (or `opts.passwords`) holds the file's key. */
+  async downloadFile(scopeId: string, fileId: string, opts: Scope = {} as Scope): Promise<FileDownload> {
     const t = this.readTransport();
     return downloadFile({ baseUrl: t.baseUrl, authHeaders: t.authHeaders, fetchImpl: t.fetch }, scopeId, fileId, async (marker) => {
-      const ring = await this.keyring({ includePasswordSalt: marker.type === "personal" });
+      const ring = await this.scopedKeyring(opts, { includePasswordSalt: marker.type === "personal" });
       return ring.keyForMarker(marker);
     });
   }
@@ -436,30 +466,32 @@ abstract class BaseClient {
   }
 
   /** Cancels a task by id, no handle needed. A `note` is sealed under the
-   * task's own key when this client holds it; otherwise it travels plaintext. */
-  async cancelTask(taskId: string, opts: CancelOptions = {}): Promise<void> {
-    const enc = opts.note !== undefined ? await this.encryptionFor((await this.getTask(taskId)).encryption) : undefined;
+   * task's own key when this client (or `opts.passwords`) holds it; otherwise
+   * it travels plaintext. */
+  async cancelTask(taskId: string, opts: CancelOptions & Scope = {} as CancelOptions & Scope): Promise<void> {
+    const enc = opts.note !== undefined ? await this.encryptionFor((await this.getTask(taskId)).encryption, opts) : undefined;
     await this.cancelTaskFromHandle(taskId, opts, enc);
   }
 
   /** Cancels a subtask by id; the note is sealed under the subtask's key when held. */
-  async cancelSubtask(subtaskId: string, opts: CancelOptions = {}): Promise<void> {
-    const enc = opts.note !== undefined ? await this.encryptionFor((await this.getSubtask(subtaskId)).encryption) : undefined;
+  async cancelSubtask(subtaskId: string, opts: CancelOptions & Scope = {} as CancelOptions & Scope): Promise<void> {
+    const enc = opts.note !== undefined ? await this.encryptionFor((await this.getSubtask(subtaskId)).encryption, opts) : undefined;
     await this.cancelSubtaskFromHandle(subtaskId, opts, enc);
   }
 
   /** Cancels every pending instance of a group by id; the note is sealed
    * under the instances' key (they share one send) when held. */
-  async cancelTaskGroup(groupId: string, opts: CancelOptions = {}): Promise<CancelGroupResult> {
-    const enc = opts.note !== undefined ? await this.encryptionFor((await this.getTaskGroup(groupId)).tasks[0]?.encryption) : undefined;
+  async cancelTaskGroup(groupId: string, opts: CancelOptions & Scope = {} as CancelOptions & Scope): Promise<CancelGroupResult> {
+    const enc = opts.note !== undefined ? await this.encryptionFor((await this.getTaskGroup(groupId)).tasks[0]?.encryption, opts) : undefined;
     return this.cancelGroupFromHandle(groupId, opts, enc);
   }
 
-  /** The key this client holds for a marker, paired with the marker, or
-   * undefined when the target is plaintext or the key is not held. */
-  private async encryptionFor(marker: EncryptionMarker | undefined): Promise<{ key: Uint8Array; marker: EncryptionMarker } | undefined> {
+  /** The key held for a marker (by this client or the call's `scope`), paired
+   * with the marker, or undefined when the target is plaintext or the key is
+   * not held. */
+  private async encryptionFor(marker: EncryptionMarker | undefined, scope: Scope): Promise<{ key: Uint8Array; marker: EncryptionMarker } | undefined> {
     if (marker === undefined) return undefined;
-    const ring = await this.keyring({ includePasswordSalt: marker.type === "personal" });
+    const ring = await this.scopedKeyring(scope, { includePasswordSalt: marker.type === "personal" });
     const key = ring.keyForMarker(marker);
     return key ? { key, marker } : undefined;
   }
@@ -506,21 +538,15 @@ abstract class BaseClient {
 
   /** Lazily build (and cache) the keyring. Argon2 is expensive, so only call
    * this when decryption is needed. With `includePasswordSalt: true`, a
-   * personal client also fetches its `password_salt` (`GET /v1/user`) so the
-   * keyring covers submission events under the personal-mode default key.
-   */
+   * personal client also holds its Personal Password key, which costs one
+   * `password_salt` fetch (`GET /v1/user`) the first time; the key is added to
+   * the same ring, so every later caller sees it too. */
   keyring(opts: { includePasswordSalt?: boolean } = {}): Promise<Keyring> {
     if (!this.keyringPromise) {
       this.keyringPromise = (async () => {
         // One topic key per [password, topic] pair, plus org master keys.
         const ring = await Keyring.build({ passwords: [], topics: [], orgMasterKeys: this.orgMasterKeys });
         for (const [pw, topic] of this.topicPasswords) ring.add(await deriveKey(pw, topic));
-        // The Personal Password key(s) — derived against the server salt — only
-        // when asked (submissions need them; the events feed doesn't pay the fetch).
-        if (opts.includePasswordSalt && this.defaultPassword !== undefined) {
-          const passwordSalt = await this.accountSalt();
-          if (passwordSalt !== undefined) ring.add(await deriveKey(this.defaultPassword, passwordSalt));
-        }
         // Supplied keys decrypt as well as encrypt — a reply to a send made
         // under an exported key has to come back readable.
         const { topicKeys, defaultKey } = await this.resolvedKeys();
@@ -531,7 +557,32 @@ abstract class BaseClient {
         return ring;
       })();
     }
-    return this.keyringPromise;
+    if (!opts.includePasswordSalt) return this.keyringPromise;
+    if (!this.keyringWithPersonalKeyPromise) {
+      this.keyringWithPersonalKeyPromise = (async () => {
+        const ring = await this.keyringPromise!;
+        const dk = await this.configuredPersonalKey();
+        if (dk !== undefined) ring.add(dk);
+        return ring;
+      })();
+    }
+    return this.keyringWithPersonalKeyPromise;
+  }
+
+  /** The Personal Password key for `password`: derived against the server
+   * `password_salt`. Undefined when the salt is unavailable (an `OrgClient`). */
+  protected async personalKeyFor(password: string): Promise<DerivedKey | undefined> {
+    const salt = await this.accountSalt();
+    if (salt === undefined) return undefined;
+    return deriveKey(password, salt);
+  }
+
+  /** The key of the configured Personal Password, derived once. */
+  protected configuredPersonalKey(): Promise<DerivedKey | undefined> {
+    if (!this.personalKeyPromise) {
+      this.personalKeyPromise = this.defaultPassword === undefined ? Promise.resolve(undefined) : this.personalKeyFor(this.defaultPassword);
+    }
+    return this.personalKeyPromise;
   }
 
   /** Remember a key derived for a send, so the keyring can decrypt that send's
@@ -568,24 +619,15 @@ abstract class BaseClient {
    * are downloadable. `since` (ISO 8601) resumes from that point, backfilling
    * submissions that arrived earlier; `idleMs` ends the stream after that many
    * ms of silence; `signal` cancels it. */
-  submissions(opts: { signal?: AbortSignal; idleMs?: number; since?: string } = {}): AsyncIterableIterator<Submission> {
-    return this.buildSubmissions(opts, this.defaultPassword);
+  submissions(opts: SubmissionsOptions & Scope = {} as SubmissionsOptions & Scope): AsyncIterableIterator<Submission> {
+    return this.buildSubmissions(opts, opts);
   }
 
-  protected async *buildSubmissions(
-    opts: { signal?: AbortSignal; idleMs?: number; since?: string },
-    defaultPassword: string | undefined,
-  ): AsyncIterableIterator<Submission> {
+  protected async *buildSubmissions(opts: SubmissionsOptions, scope: Scope): AsyncIterableIterator<Submission> {
     const IDLE = Symbol("idle");
-    const keyring = await this.keyring(); // topic + org keys
-    // Submissions are encrypted under the Personal Password key (account password +
-    // the server-issued password_salt), not a topic key — fold it in for this call.
-    const supplied = await this.resolvedKeys();
-    if (supplied.defaultKey !== undefined) keyring.add(supplied.defaultKey);
-    if (defaultPassword !== undefined) {
-      const salt = await this.accountSalt();
-      if (salt !== undefined) keyring.add(await deriveKey(defaultPassword, salt));
-    }
+    // A submission is encrypted under the author's Personal Password key on a
+    // personal account, or an org master key in an organization; never a topic key.
+    const keyring = await this.scopedKeyring(scope, { includePasswordSalt: true });
     const resolveKey = buildKeyResolver(keyring, undefined);
     const dec = buildDecryptor(resolveKey);
     const base = { transport: this.downloadTransport(), resolveKey };
@@ -794,15 +836,16 @@ abstract class BaseClient {
    *
    * The result is the observe-only surface: `WatchedTaskGroup` carries no
    * capability tokens and no `append()` — that lives only on the rich
-   * `TaskGroup` a send returns. Decryption still works via this client's
-   * keyring / configured passwords. */
+   * `TaskGroup` a send returns. Decryption uses this client's configured
+   * passwords plus the call's `passwords`. */
   watchTaskGroup(args: {
     groupId: string;
     createdAt?: string;
     members: ReadonlyArray<{ taskId: string; recipient?: { publicId: string; name?: string | null } }>;
-  }): WatchedTaskGroup {
+  } & Scope): WatchedTaskGroup {
     const hub = this.hub();
     const downloads = this.downloadTransport();
+    const getKeyring = this.keyringGetter(args, { includePasswordSalt: true });
     const instances = args.members.map((m) => {
       hub.registerEntity(m.taskId, args.createdAt);
       return new WatchedTask({
@@ -810,7 +853,7 @@ abstract class BaseClient {
         createdAt: args.createdAt ?? "",
         ...(m.recipient ? { recipient: { publicId: m.recipient.publicId, name: m.recipient.name ?? null } } : {}),
         hub,
-        getKeyring: () => this.keyring(),
+        getKeyring,
         downloads,
       });
     });
@@ -828,7 +871,7 @@ abstract class BaseClient {
    * cursor to the append time, so the collection backfills the append→watch
    * gap. Observe-only: no `cancel()` — that lives on the rich `Subtask` a
    * handle append returns. Decryption works via this client's keyring. */
-  watchSubtask(args: { subtaskId: string; taskId: string; createdAt?: string }): WatchedSubtask {
+  watchSubtask(args: { subtaskId: string; taskId: string; createdAt?: string } & Scope): WatchedSubtask {
     const hub = this.hub();
     hub.registerEntity(args.taskId, args.createdAt);
     return new WatchedSubtask({
@@ -836,7 +879,7 @@ abstract class BaseClient {
       parentTaskId: args.taskId,
       createdAt: args.createdAt ?? "",
       hub,
-      getKeyring: () => this.keyring(),
+      getKeyring: this.keyringGetter(args, { includePasswordSalt: true }),
       downloads: this.downloadTransport(),
     });
   }
@@ -853,9 +896,10 @@ abstract class BaseClient {
     groupId: string;
     createdAt?: string;
     members: ReadonlyArray<{ taskId: string; subtaskId: string; recipient?: { publicId: string; name?: string | null } }>;
-  }): WatchedSubtaskGroup {
+  } & Scope): WatchedSubtaskGroup {
     const hub = this.hub();
     const downloads = this.downloadTransport();
+    const getKeyring = this.keyringGetter(args, { includePasswordSalt: true });
     const instances = args.members.map((m) => {
       hub.registerEntity(m.taskId, args.createdAt);
       return new WatchedSubtask({
@@ -864,7 +908,7 @@ abstract class BaseClient {
         createdAt: args.createdAt ?? "",
         ...(m.recipient ? { recipient: { publicId: m.recipient.publicId, name: m.recipient.name ?? null } } : {}),
         hub,
-        getKeyring: () => this.keyring(),
+        getKeyring,
         downloads,
       });
     });
@@ -889,8 +933,9 @@ abstract class BaseClient {
     groupId: string;
     createdAt?: string;
     members: ReadonlyArray<{ notificationId: string; recipient?: { publicId: string; name?: string | null } }>;
-  }): WatchedNotificationGroup {
+  } & Scope): WatchedNotificationGroup {
     const hub = this.hub();
+    const getKeyring = this.keyringGetter(args, { includePasswordSalt: true });
     const instances = args.members.map((m) => {
       hub.registerEntity(m.notificationId, args.createdAt);
       return new WatchedNotification({
@@ -898,7 +943,7 @@ abstract class BaseClient {
         createdAt: args.createdAt ?? "",
         ...(m.recipient ? { recipient: { publicId: m.recipient.publicId, name: m.recipient.name ?? null } } : {}),
         hub,
-        getKeyring: () => this.keyring(),
+        getKeyring,
       });
     });
     return new WatchedNotificationGroup({
@@ -1093,7 +1138,7 @@ export type ClientConfig = CommonConfig & {
 /** Personal client, authenticated by a user API-Token. Streams the personal
  * event feed at `/ws/v1/events` and derives topic / default keys from
  * `passwords` / `password`. For organization access use `OrgClient`. */
-export class Client extends BaseClient {
+export class Client extends BaseClient<CallPasswords> {
   readonly apiToken: string | undefined;
   readonly accessToken: string | undefined;
 
@@ -1130,10 +1175,27 @@ export class Client extends BaseClient {
    * Personal Password used to decrypt them for this call (otherwise the
    * configured default password is used); supply it when you didn't set one at
    * construction. */
-  override submissions(
-    opts: { signal?: AbortSignal; idleMs?: number; since?: string; password?: string } = {},
-  ): AsyncIterableIterator<Submission> {
-    return this.buildSubmissions(opts, opts.password ?? this.defaultPassword);
+  /** `password` is the Personal Password for this stream, a shorthand for a
+   * bare string in `passwords`. */
+  override submissions(opts: SubmissionsOptions & CallPasswords & { password?: string } = {}): AsyncIterableIterator<Submission> {
+    const { password, passwords, ...rest } = opts;
+    const entries: Array<[string, string] | string> = [];
+    if (passwords !== undefined) entries.push(...(typeof passwords === "string" ? [passwords] : passwords));
+    if (password !== undefined) entries.push(password);
+    return this.buildSubmissions(rest, entries.length > 0 ? { passwords: entries } : {});
+  }
+
+  protected async scopedKeyring(scope: CallPasswords, opts: { includePasswordSalt?: boolean } = {}): Promise<Keyring> {
+    const base = await this.keyring(opts);
+    if (scope.passwords === undefined) return base;
+    const { topicPasswords, defaultPassword } = parsePasswords(scope.passwords);
+    const ring = base.extend();
+    for (const [pw, topic] of topicPasswords) ring.add(await deriveKey(pw, topic));
+    if (defaultPassword !== undefined) {
+      const dk = await this.personalKeyFor(defaultPassword);
+      if (dk !== undefined) ring.add(dk);
+    }
+    return ring;
   }
 
   protected wsPath(): string {
@@ -1187,22 +1249,24 @@ export class Client extends BaseClient {
     return { key: dk.symmetricKey, marker: { type: "personal", keyFingerprint: dk.fingerprint } };
   }
 
-  /** Encryption material for a topicless self-send: derived from the account
-   * default password + the server `password_salt` — the SAME key that decrypts
-   * your submissions, so a self-send round-trips to your own clients. Returns
-   * undefined (plaintext send) when no default password is configured. */
-  private async selfSendEnc(): Promise<{ key: Uint8Array; marker: EncryptionMarker } | undefined> {
-    // A supplied default key skips the whole derivation — and with it the
-    // `GET /v1/user` salt fetch, which only exists to feed Argon2.
-    const { defaultKey } = await this.resolvedKeys();
-    if (defaultKey !== undefined) {
-      this.rememberKey(defaultKey);
-      return { key: defaultKey.symmetricKey, marker: { type: "personal", keyFingerprint: defaultKey.fingerprint } };
+  /** Encryption material for a topicless self-send: the Personal Password key,
+   * derived from the Personal Password + the server `password_salt` — the SAME
+   * key that decrypts your submissions, so a self-send round-trips to your own
+   * clients. A per-send `password` is used as the Personal Password for this
+   * send; otherwise the configured one. Returns undefined (plaintext send) when
+   * neither is available. */
+  private async selfSendEnc(password?: string): Promise<{ key: Uint8Array; marker: EncryptionMarker } | undefined> {
+    if (password === undefined) {
+      // A supplied default key skips the whole derivation — and with it the
+      // `GET /v1/user` salt fetch, which only exists to feed Argon2.
+      const { defaultKey } = await this.resolvedKeys();
+      if (defaultKey !== undefined) {
+        this.rememberKey(defaultKey);
+        return { key: defaultKey.symmetricKey, marker: { type: "personal", keyFingerprint: defaultKey.fingerprint } };
+      }
     }
-    if (this.defaultPassword === undefined) return undefined;
-    const salt = await this.accountSalt();
-    if (salt === undefined) return undefined;
-    const dk = await deriveKey(this.defaultPassword, salt);
+    const dk = password === undefined ? await this.configuredPersonalKey() : await this.personalKeyFor(password);
+    if (dk === undefined) return undefined;
     this.rememberKey(dk);
     return { key: dk.symmetricKey, marker: { type: "personal", keyFingerprint: dk.fingerprint } };
   }
@@ -1215,10 +1279,10 @@ export class Client extends BaseClient {
    * are encrypted under the topic key (salt = topic value) before sending. */
   // Self-send (personal Client only): OMIT `topic` to send to your OWN
   // devices. Always a single `Task` (there is one recipient — you), never a
-  // group. Encrypted under the account key when a default password is
-  // configured, else plaintext. `shared` is moot (one recipient) and `password`
-  // isn't accepted (a self-send uses the account key).
-  async sendTask(opts: SendOptions & { topic?: undefined; password?: undefined; shared?: boolean }): Promise<Task>;
+  // group. Encrypted under the Personal Password key: `password` is the
+  // Personal Password for this send, else the configured one, else plaintext.
+  // `shared` is moot (one recipient).
+  async sendTask(opts: SendOptions & { topic?: undefined; password?: string; shared?: boolean }): Promise<Task>;
   async sendTask(opts: { topic: string } & SendOptions & { password?: string } & { shared: true }): Promise<Task>;
   async sendTask(opts: { topic: string } & SendOptions & { password?: string } & { shared?: false }): Promise<TaskGroup>;
   // A computed (non-literal) `shared` can go either way — discriminate with
@@ -1226,9 +1290,7 @@ export class Client extends BaseClient {
   async sendTask(opts: { topic: string } & SendOptions & { password?: string }): Promise<Task | TaskGroup>;
   async sendTask(opts: { topic?: string } & SendOptions & { password?: string }): Promise<Task | TaskGroup> {
     const { topic, password, ...rest } = opts;
-    if (topic === undefined && password !== undefined)
-      throw new Error("password requires a topic; a self-send is encrypted with the client's default password");
-    const enc = topic === undefined ? await this.selfSendEnc() : await this.personalEnc(topic, password);
+    const enc = topic === undefined ? await this.selfSendEnc(password) : await this.personalEnc(topic, password);
     const resp = await this.sendEncrypted(topic === undefined ? {} : { topic }, rest, enc);
     if (isTaskGroupResponse(resp)) return this.taskGroupHandle(resp, enc);
     return this.taskHandle(resp, enc);
@@ -1244,7 +1306,7 @@ export class Client extends BaseClient {
    * `sendTask`. */
   // Self-send (personal Client only): OMIT `topic` to notify your OWN
   // devices. Always a single `Notification`. Encryption mirrors `sendTask`.
-  async sendNotification(opts: SendNotificationOptions & { topic?: undefined; password?: undefined; shared?: boolean }): Promise<Notification>;
+  async sendNotification(opts: SendNotificationOptions & { topic?: undefined; password?: string; shared?: boolean }): Promise<Notification>;
   async sendNotification(opts: { topic: string } & SendNotificationOptions & { password?: string } & { shared: true }): Promise<Notification>;
   async sendNotification(opts: { topic: string } & SendNotificationOptions & { password?: string } & { shared?: false }): Promise<NotificationGroup>;
   // A computed (non-literal) `shared` can go either way — discriminate with
@@ -1254,9 +1316,7 @@ export class Client extends BaseClient {
     opts: { topic?: string } & SendNotificationOptions & { password?: string },
   ): Promise<Notification | NotificationGroup> {
     const { topic, password, ...rest } = opts;
-    if (topic === undefined && password !== undefined)
-      throw new Error("password requires a topic; a self-send is encrypted with the client's default password");
-    const enc = topic === undefined ? await this.selfSendEnc() : await this.personalEnc(topic, password);
+    const enc = topic === undefined ? await this.selfSendEnc(password) : await this.personalEnc(topic, password);
     const resp = await this.sendNotificationEncrypted(topic === undefined ? {} : { topic }, rest, enc);
     if (isNotificationGroupResponse(resp)) return this.notificationGroupHandle(resp, enc);
     return this.notificationHandle(resp, enc);
@@ -1266,9 +1326,10 @@ export class Client extends BaseClient {
    * `appendToken` (returned at task creation — there is no fetch-by-id). Stateless:
    * no `Task` handle required. With `topic`/`password` the body is encrypted under
    * the topic key (must match the parent's encryption); without a topic it is
-   * encrypted under the client's default password when one is configured — the
-   * same key a topicless self-send parent was sealed with. Returns the created
-   * subtask's id + minted attachments. */
+   * encrypted under the Personal Password key (`password` as the Personal
+   * Password for this call, else the configured one) — the same key a
+   * topicless self-send parent was sealed with. Returns the created subtask's
+   * id + minted attachments. */
   async appendSubtask(
     opts: { appendToken: string; topic?: string; password?: string; instances?: string[] } & SendSubtaskOptions,
   ): Promise<CreateSubtaskResponse> {
@@ -1276,9 +1337,7 @@ export class Client extends BaseClient {
     if (!rest.content && !(rest.inputs && rest.inputs.length > 0)) {
       throw new Error("Either content or inputs must be provided");
     }
-    if (topic === undefined && password !== undefined)
-      throw new Error("password requires a topic; a topicless append is encrypted with the client's default password");
-    const enc = topic !== undefined ? await this.personalEnc(topic, password) : await this.selfSendEnc();
+    const enc = topic !== undefined ? await this.personalEnc(topic, password) : await this.selfSendEnc(password);
     const prepared = await prepareFileAttachments(rest.files, enc?.key);
     const data = await buildSubtaskData(rest, enc, prepared.map((p) => p.meta));
     const resp = await createSubtask({
@@ -1317,7 +1376,7 @@ export type OrgClientConfig = CommonConfig & {
  * appends, attachment uploads, file downloads, and the org-wide event stream
  * at `/ws/v1/events/organization` (the org is derived from the credential).
  * Decrypts org content with the supplied `master_key`(s). */
-export class OrgClient extends BaseClient {
+export class OrgClient extends BaseClient<NoCallPasswords> {
   readonly apiKey: string | undefined;
   readonly bearerToken: string | undefined;
 
@@ -1359,6 +1418,11 @@ export class OrgClient extends BaseClient {
 
   protected readsOrgSurface(): boolean {
     return true;
+  }
+
+  /** Org content decrypts with the configured master keys; a call adds nothing. */
+  protected scopedKeyring(_scope: NoCallPasswords, opts: { includePasswordSalt?: boolean } = {}): Promise<Keyring> {
+    return this.keyring(opts);
   }
 
   protected wsPath(): string {

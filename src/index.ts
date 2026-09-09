@@ -5,6 +5,9 @@ export {
   type OrgClientConfig,
   type PasswordsConfig,
   type KeysConfig,
+  type CallPasswords,
+  type NoCallPasswords,
+  type SubmissionsOptions,
   type PersonalKeyInput,
 } from "./client.js";
 export {

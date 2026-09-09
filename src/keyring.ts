@@ -36,6 +36,8 @@ export class Keyring {
   private readonly byFingerprint = new Map<string, DerivedKey>();
   // Org master keys, matched by version.
   private readonly byVersion = new Map<number, Uint8Array>();
+  // Lookups that miss here fall through to the parent (see `extend`).
+  private parent: Keyring | undefined;
 
   static async build(input: KeyringInput): Promise<Keyring> {
     const ring = new Keyring();
@@ -76,33 +78,53 @@ export class Keyring {
     this.byFingerprint.set(key.fingerprint, key);
   }
 
+  /** A child keyring layered over this one: keys added to the child are held
+   * by the child alone, lookups that miss it fall through to this keyring —
+   * including keys added here later. Scopes call-level keys without touching
+   * the shared ring. */
+  extend(): Keyring {
+    const child = new Keyring();
+    child.parent = this;
+    return child;
+  }
+
   lookup(fingerprint: string): DerivedKey | undefined {
-    return this.byFingerprint.get(fingerprint);
+    return this.byFingerprint.get(fingerprint) ?? this.parent?.lookup(fingerprint);
   }
 
   lookupOrg(version: number): Uint8Array | undefined {
-    return this.byVersion.get(version);
+    return this.byVersion.get(version) ?? this.parent?.lookupOrg(version);
   }
 
   /** Resolve the raw symmetric key for an encryption marker, or undefined.
    * Personal markers match a derived key by fingerprint; org markers a
    * master_key by version. */
   keyForMarker(marker: EncryptionMarker): Uint8Array | undefined {
-    return marker.type === "personal"
-      ? this.byFingerprint.get(marker.keyFingerprint)?.symmetricKey
-      : this.byVersion.get(marker.v);
+    return marker.type === "personal" ? this.lookup(marker.keyFingerprint)?.symmetricKey : this.lookupOrg(marker.v);
+  }
+
+  private fingerprints(): Set<string> {
+    const all = this.parent?.fingerprints() ?? new Set<string>();
+    for (const fp of this.byFingerprint.keys()) all.add(fp);
+    return all;
+  }
+
+  private orgVersions(): Set<number> {
+    const all = this.parent?.orgVersions() ?? new Set<number>();
+    for (const v of this.byVersion.keys()) all.add(v);
+    return all;
   }
 
   /** Number of personal/topic fingerprints held (org keys counted separately). */
   get size(): number {
-    return this.byFingerprint.size;
+    return this.fingerprints().size;
   }
 
   get orgKeyCount(): number {
-    return this.byVersion.size;
+    return this.orgVersions().size;
   }
 
   get isEmpty(): boolean {
-    return this.byFingerprint.size === 0 && this.byVersion.size === 0;
+    return this.size === 0 && this.orgKeyCount === 0;
   }
 }

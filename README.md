@@ -33,8 +33,9 @@ Two parallel aggregates: `sendTask` (multiple inputs, replies) and
 `sendNotification` (a single text/choice/actions input, no replies). Both take a
 single options object; the send target (`topic` for a personal `Client`, or
 `topic` / `member` / `broadcast` on an `OrgClient`) lives in that object. Omit
-the target on a personal `Client` to send to your own devices (a note-to-self;
-encrypted under the account default password when one is configured).
+the target on a personal `Client` to send to your own devices (a self-send,
+encrypted under the Personal Password: the per-send `password`, else the
+configured one).
 
 > **Ids are type-prefixed strings.** `taskId`, `subtaskId`, input/reply/file ids
 > and the like come back type-tagged — `tsk_…`, `sub_…`, `inp_…`, `rfl_…` — not
@@ -211,6 +212,19 @@ handle from persisted ids: `client.watchTaskGroup({ groupId, createdAt,
 members })` / `client.watchNotificationGroup(...)` — same streams, but no
 tokens and no `append()`; pass `createdAt` to backfill everything since the
 send.
+
+**Per-call passwords.** The receive side takes `passwords` per call, in the
+same shape as the constructor's: `[password, topic]` pairs and/or one bare
+Personal Password string. The keys stay with that call. `watchTaskGroup`,
+`watchSubtask`, `watchSubtaskGroup`, `watchNotificationGroup`, `submissions`,
+`downloadFile` and the id-addressed `cancelTask` / `cancelSubtask` /
+`cancelTaskGroup` (which seal the note) all accept it:
+
+```ts
+const group = client.watchTaskGroup({ groupId, members, passwords: [["hunter2", "deploys"]] });
+await client.cancelTask(taskId, { note: "superseded", passwords: [["hunter2", "deploys"]] });
+const file = await client.downloadFile(taskId, fileId, { passwords: "personal-pw" });
+```
 
 ## Submissions
 

@@ -83,9 +83,24 @@ describe("note-to-self (topicless send)", () => {
     expect(calls[0]!.headers["API-Token"]).toBe("tok");
   });
 
-  test("passing a password with no topic throws", async () => {
-    const client = new Client({ apiToken: "tok", fetch: queuedFetch([taskResponse]) });
-    // @ts-expect-error — password with no topic isn't a valid overload; runtime guards too.
-    await expect(client.sendTask({ content: "hi", password: "ad-hoc" })).rejects.toThrow();
+  test("a per-send password on a topicless send is the Personal Password for that send", async () => {
+    const calls: RecordedCall[] = [];
+    // First fetch is GET /v1/user (account salt), then the task POST.
+    const client = new Client({ apiToken: "tok", fetch: queuedFetch([userInfo, taskResponse], calls) });
+    await client.sendTask({ title: "secret", content: "hi", password: "my-account-pw" });
+    const post = calls.find((c) => c.url.includes("/tasks/json"))!;
+    const body = post.body as Record<string, unknown>;
+    expect(body.topic).toBeUndefined();
+    expect((body.encryption as Record<string, unknown>).type).toBe("personal");
+    expect(body.content).not.toBe("hi");
+  });
+
+  test("a per-send password on a topicless send yields the same key as the configured Personal Password", async () => {
+    const perSend: RecordedCall[] = [];
+    await new Client({ apiToken: "tok", fetch: queuedFetch([userInfo, taskResponse], perSend) }).sendTask({ content: "hi", password: "my-account-pw" });
+    const configured: RecordedCall[] = [];
+    await new Client({ apiToken: "tok", passwords: "my-account-pw", fetch: queuedFetch([userInfo, taskResponse], configured) }).sendTask({ content: "hi" });
+    const fp = (calls: RecordedCall[]) => ((calls.find((c) => c.url.includes("/tasks/json"))!.body as Record<string, unknown>).encryption as Record<string, unknown>).keyFingerprint;
+    expect(fp(perSend)).toBe(fp(configured));
   });
 });

@@ -471,6 +471,9 @@ export type CreateNotificationRequest = {
   actionInput?: { actions: NotificationAction[] };
   // At most one media attachment (image/audio), as a link or an uploaded file.
   media?: NotificationMedia;
+  // A URL (any scheme) offered as an "Open link" button on the push when the
+  // notification has no input. Encrypted like the title on an encrypted send.
+  link?: string;
   encryption?: { type: "personal"; keyFingerprint: string } | { type: "org"; v: number };
   // iOS Critical Alert (bypasses silent mode / Do Not Disturb). Android ignores it.
   critical?: boolean;
@@ -498,6 +501,11 @@ export type SendNotificationOptions = {
   // exclusive — a notification shows at most one media item.
   image?: FileAttachment | string;
   audio?: FileAttachment | string;
+  /** A URL shown as an "Open link" button on the push. Any scheme works: an
+   * https URL opens the browser, an app's deep link (`unifi-protect://…`) opens
+   * that app. Mutually exclusive with `input` — the input's buttons take the
+   * action slots. */
+  link?: string;
   critical?: boolean;
   /** Recipient-state model: `true` = one single shared notification (all
    * recipients share one state; `sendNotification` returns a `Notification`);

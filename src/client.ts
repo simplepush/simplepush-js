@@ -173,6 +173,7 @@ async function buildNotificationBody(
     ...(opts.title !== undefined ? { title: await e(opts.title) } : {}),
     ...(opts.content !== undefined ? { content: await e(opts.content) } : {}),
     ...(media ? { media } : {}),
+    ...(opts.link !== undefined ? { link: await e(opts.link) } : {}),
     ...(opts.critical ? { critical: true } : {}),
     // Recipient-state model: sent explicitly only when opting into the
     // shared notification; absent = the backend's independent-instances default.
@@ -729,6 +730,11 @@ abstract class BaseClient<Scope extends object> {
     opts: SendNotificationOptions,
     enc: { key: Uint8Array; marker: EncryptionMarker } | undefined,
   ): Promise<CreateNotificationResponse> {
+    // The link renders only as the push's action button, which an input's own
+    // buttons occupy — the backend rejects the pair; fail before the round trip.
+    if (opts.link !== undefined && opts.input !== undefined) {
+      throw new Error("a notification carries either an input or a link, not both: the input's buttons take the action slots, so the link would never be shown");
+    }
     const { media, prepared } = await prepareNotificationMedia(opts.image, opts.audio, enc?.key);
     const body = await buildNotificationBody(target, opts, enc, media);
     const authHeaders = prepared ? this.createAuthHeaders() : this.httpAuthHeaders();

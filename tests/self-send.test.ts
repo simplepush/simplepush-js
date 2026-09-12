@@ -83,6 +83,37 @@ describe("note-to-self (topicless send)", () => {
     expect(calls[0]!.headers["API-Token"]).toBe("tok");
   });
 
+  test("notification link rides the body as-is on a plaintext send", async () => {
+    const calls: RecordedCall[] = [];
+    const client = new Client({ apiToken: "tok", fetch: queuedFetch([notificationResponse], calls) });
+    await client.sendNotification({ content: "motion", link: "unifi-protect://protect/devices/abc" });
+    const body = calls[0]!.body as Record<string, unknown>;
+    expect(body.link).toBe("unifi-protect://protect/devices/abc");
+  });
+
+  test("notification link together with an input is rejected before sending", async () => {
+    const calls: RecordedCall[] = [];
+    const client = new Client({ apiToken: "tok", fetch: queuedFetch([notificationResponse], calls) });
+    await expect(
+      client.sendNotification({ content: "motion", link: "https://example.com", input: { type: "text" } }),
+    ).rejects.toThrow("either an input or a link");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("notification link is sealed on an encrypted send", async () => {
+    const calls: RecordedCall[] = [];
+    const client = new Client({
+      apiToken: "tok",
+      passwords: "my-account-pw",
+      fetch: queuedFetch([userInfo, notificationResponse], calls),
+    });
+    await client.sendNotification({ content: "motion", link: "unifi-protect://protect/devices/abc" });
+    const post = calls.find((c) => c.url.includes("/notifications/json"))!;
+    const body = post.body as Record<string, unknown>;
+    expect(typeof body.link).toBe("string");
+    expect(body.link).not.toBe("unifi-protect://protect/devices/abc");
+  });
+
   test("a per-send password on a topicless send is the Personal Password for that send", async () => {
     const calls: RecordedCall[] = [];
     // First fetch is GET /v1/user (account salt), then the task POST.

@@ -47,7 +47,7 @@ import type {
 import { isTaskGroupResponse, isSubtaskGroupResponse, isNotificationGroupResponse } from "./types.js";
 import { parseBaseUrl } from "./url.js";
 import { downloadFile, fileDownloadUrl, type FileDownload, type FileDownloadUrl } from "./downloads.js";
-import { fetchOrgMasterKeys, parseIntegrationToken } from "./integration.js";
+import { fetchIntegrationGrant, parseIntegrationToken } from "./integration.js";
 import { fetchUserInfo } from "./user.js";
 import type { WebSocketFactory } from "./ws.js";
 
@@ -1375,6 +1375,10 @@ export type OrgClientConfig = CommonConfig & {
    * Mutually exclusive with it; requires `orgMasterKeyVersion`. */
   orgMasterKey?: Uint8Array;
   orgMasterKeyVersion?: number;
+  /** Scope codes the credential holds (`send`, `read`, `files:read`). An
+   * integration token reports them at startup; an Api-Key or a CLI-session
+   * bearer has none, and callers treat that unknown as unrestricted. */
+  scopes?: string[];
 };
 
 /** Organization client, authenticated by the org Api-Key or a CLI admin
@@ -1385,6 +1389,7 @@ export type OrgClientConfig = CommonConfig & {
 export class OrgClient extends BaseClient<NoCallPasswords> {
   readonly apiKey: string | undefined;
   readonly bearerToken: string | undefined;
+  private readonly grantedScopes: ReadonlySet<string> | undefined;
 
   /** Builds an org client from an integration token (`spi_<credential>.<seed>`,
    * from `sp integration create`): the credential half becomes the bearer, the
@@ -1396,14 +1401,25 @@ export class OrgClient extends BaseClient<NoCallPasswords> {
   static async fromIntegrationToken(token: string, config: CommonConfig = {}): Promise<OrgClient> {
     const parsed = await parseIntegrationToken(token);
     const baseUrl = parseBaseUrl(config.baseUrl ?? "https://api.simplepu.sh");
-    const orgMasterKeys = await fetchOrgMasterKeys(baseUrl, parsed, config.fetch ?? fetch);
-    return new OrgClient({ ...config, bearerToken: parsed.credential, ...(orgMasterKeys.length > 0 ? { orgMasterKeys } : {}) });
+    const grant = await fetchIntegrationGrant(baseUrl, parsed, config.fetch ?? fetch);
+    return new OrgClient({
+      ...config,
+      bearerToken: parsed.credential,
+      ...(grant.orgMasterKeys.length > 0 ? { orgMasterKeys: grant.orgMasterKeys } : {}),
+      scopes: grant.scopes,
+    });
   }
 
   /** Whether this client holds org master keys, i.e. sends encrypt and org
    * ciphertext decrypts. */
   get orgEncryptionEnabled(): boolean {
     return this.orgMasterKeys.length > 0;
+  }
+
+  /** The scope codes this credential holds, or undefined when unknown (see
+   * `OrgClientConfig.scopes`). */
+  get scopes(): ReadonlySet<string> | undefined {
+    return this.grantedScopes;
   }
 
   constructor(config: OrgClientConfig) {
@@ -1413,6 +1429,7 @@ export class OrgClient extends BaseClient<NoCallPasswords> {
     this.apiKey = config.apiKey;
     this.bearerToken = config.bearerToken;
     this.orgMasterKeys = normalizeOrgMasterKeys(config);
+    this.grantedScopes = config.scopes !== undefined ? new Set(config.scopes) : undefined;
   }
 
   /** The credential header for every authenticated surface: sends, appends,

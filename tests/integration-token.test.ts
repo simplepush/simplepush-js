@@ -31,7 +31,7 @@ async function mint() {
   return {
     token,
     master,
-    keys: { enabled: true, adminPubkeyB64: s.to_base64(admin.publicKey, s.base64_variants.ORIGINAL), wrappedKeys: [{ version: 1, blob: s.to_base64(blob, s.base64_variants.ORIGINAL) }] },
+    keys: { enabled: true, adminPubkeyB64: s.to_base64(admin.publicKey, s.base64_variants.ORIGINAL), wrappedKeys: [{ version: 1, blob: s.to_base64(blob, s.base64_variants.ORIGINAL) }], scopes: ["send", "read"] },
   };
 }
 
@@ -50,8 +50,16 @@ describe("OrgClient.fromIntegrationToken", () => {
 
   test("an org without encryption yields a plaintext client", async () => {
     const { token } = await mint();
-    const client = await OrgClient.fromIntegrationToken(token, { baseUrl: "http://backend.test", fetch: fetchWith(200, { enabled: false }, []) });
+    const client = await OrgClient.fromIntegrationToken(token, { baseUrl: "http://backend.test", fetch: fetchWith(200, { enabled: false, scopes: ["send"] }, []) });
     expect(client.orgEncryptionEnabled).toBe(false);
+  });
+
+  test("the scopes the credential was minted with are known to the client; an Api-Key client has none", async () => {
+    const { token, keys } = await mint();
+    const scoped = await OrgClient.fromIntegrationToken(token, { baseUrl: "http://backend.test", fetch: fetchWith(200, { ...keys, scopes: ["read", "files:read"] }, []) });
+    expect(scoped.scopes).toEqual(new Set(["read", "files:read"]));
+    expect(scoped.orgEncryptionEnabled).toBe(true);
+    expect(new OrgClient({ apiKey: "k" }).scopes).toBeUndefined();
   });
 
   test("a rejected credential is an HttpError; a malformed token never reaches the network", async () => {

@@ -42,20 +42,27 @@ type IntegrationKeysWire = {
   enabled: boolean;
   adminPubkeyB64?: string;
   wrappedKeys?: { version: number; blob: string }[];
+  scopes: string[];
 };
 
-/** Fetches the master keys the org admin wrapped to this integration and opens
- * them with the seed-derived keypair. `crypto_box_open_easy` also AUTHENTICATES
- * the admin: a blob not wrapped by the holder of the admin private key fails
- * the tag check against the pinned admin pubkey, so the backend cannot forge
- * wraps. Returns [] when the org has no encryption enabled. */
-export async function fetchOrgMasterKeys(baseUrl: URL, token: IntegrationToken, fetchImpl: typeof fetch = fetch): Promise<OrgMasterKey[]> {
+/** What an integration learns about itself at startup: the org master keys
+ * the admin wrapped to it (empty when the org has no encryption enabled) and
+ * the scope codes it was minted with (`send`, `read`, `files:read`), so a
+ * holder can tell up front which operations it may perform. */
+export type IntegrationGrant = { orgMasterKeys: OrgMasterKey[]; scopes: string[] };
+
+/** Fetches this integration's grant and opens the wrapped master keys with the
+ * seed-derived keypair. `crypto_box_open_easy` also AUTHENTICATES the admin: a
+ * blob not wrapped by the holder of the admin private key fails the tag check
+ * against the pinned admin pubkey, so the backend cannot forge wraps. */
+export async function fetchIntegrationGrant(baseUrl: URL, token: IntegrationToken, fetchImpl: typeof fetch = fetch): Promise<IntegrationGrant> {
   const s = await sodium();
   const path = "v1/org/integration/keys";
   const resp = await fetchImpl(new URL(path, baseUrl), { headers: { Authorization: `Bearer ${token.credential}` } });
   if (!resp.ok) throw new HttpError("GET", path, resp.status, await resp.text().catch(() => ""));
   const body = (await resp.json()) as IntegrationKeysWire;
-  if (!body.enabled || !body.adminPubkeyB64) return [];
+  const scopes = body.scopes;
+  if (!body.enabled || !body.adminPubkeyB64) return { orgMasterKeys: [], scopes };
 
   const adminPubkey = s.from_base64(body.adminPubkeyB64, s.base64_variants.ORIGINAL);
   const keypair = s.crypto_box_seed_keypair(token.seed);
@@ -69,5 +76,10 @@ export async function fetchOrgMasterKeys(baseUrl: URL, token: IntegrationToken, 
     const key = s.crypto_box_open_easy(blob.slice(nonceBytes), blob.slice(0, nonceBytes), adminPubkey, keypair.privateKey);
     keys.push({ version: wrap.version, key });
   }
-  return keys;
+  return { orgMasterKeys: keys, scopes };
+}
+
+/** The master keys half of [[fetchIntegrationGrant]]. */
+export async function fetchOrgMasterKeys(baseUrl: URL, token: IntegrationToken, fetchImpl: typeof fetch = fetch): Promise<OrgMasterKey[]> {
+  return (await fetchIntegrationGrant(baseUrl, token, fetchImpl)).orgMasterKeys;
 }

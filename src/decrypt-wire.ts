@@ -19,10 +19,13 @@
 // the payoff is that "undecryptable: N" always means real sealed content.
 
 import { decrypt } from "./crypto.js";
-import type { EncryptionMarker } from "./events.js";
+import type { EncryptionMarker, Event } from "./events.js";
+import type { SubmissionEntry, SubtaskPayloadWire, TaskPayloadWire, TaskSummary } from "./queries.js";
 import { Keyring } from "./keyring.js";
 
-export type DecryptedWire = { value: unknown; undecryptable: number };
+/** A decrypted copy of the input, same shape: sealed fields hold plaintext,
+ * and `undecryptable` counts the ones left as ciphertext. */
+export type DecryptedWire<T = unknown> = { value: T; undecryptable: number };
 
 type State = { undecryptable: number };
 type Rec = Record<string, unknown>;
@@ -184,7 +187,7 @@ async function decPayloadInPlace(p: Rec, kr: Keyring, st: State): Promise<void> 
 }
 
 /** Decrypts a task or subtask payload (the shapes chain reads return). */
-export async function decryptTaskPayload(value: unknown, kr: Keyring): Promise<DecryptedWire> {
+export async function decryptTaskPayload<T extends TaskPayloadWire | SubtaskPayloadWire>(value: T, kr: Keyring): Promise<DecryptedWire<T>> {
   const st: State = { undecryptable: 0 };
   const out = structuredClone(value);
   const p = obj(out);
@@ -193,7 +196,7 @@ export async function decryptTaskPayload(value: unknown, kr: Keyring): Promise<D
 }
 
 /** Decrypts a task index / group roster row: `title` and `tag` are its sealed fields. */
-export async function decryptTaskSummary(value: unknown, kr: Keyring): Promise<DecryptedWire> {
+export async function decryptTaskSummary(value: TaskSummary, kr: Keyring): Promise<DecryptedWire<TaskSummary>> {
   const st: State = { undecryptable: 0 };
   const out = structuredClone(value);
   const s = obj(out);
@@ -208,7 +211,7 @@ export async function decryptTaskSummary(value: unknown, kr: Keyring): Promise<D
 
 /** Decrypts a submission (body + inline location) under the entry's marker —
  * the submission carries no marker of its own; the feed envelope's applies. */
-export async function decryptSubmission(value: unknown, kr: Keyring, marker: EncryptionMarker | undefined): Promise<DecryptedWire> {
+export async function decryptSubmission<T extends SubmissionEntry["submission"]>(value: T, kr: Keyring, marker: EncryptionMarker | undefined): Promise<DecryptedWire<T>> {
   const st: State = { undecryptable: 0 };
   const out = structuredClone(value);
   const s = obj(out);
@@ -219,7 +222,9 @@ export async function decryptSubmission(value: unknown, kr: Keyring, marker: Enc
 /** Decrypts one wire event's `data` in place on a clone of the event, by
  * event-data type — the same per-type map the watch views use. Unrecognized
  * types pass through untouched. */
-export async function decryptEvent(event: unknown, kr: Keyring): Promise<DecryptedWire> {
+/** Takes the two envelope fields the sealed content depends on, so a caller
+ * can hand it a full event or just `{ encryption, data }`. */
+export async function decryptEvent<T extends Pick<Event, "data" | "encryption">>(event: T, kr: Keyring): Promise<DecryptedWire<T>> {
   const st: State = { undecryptable: 0 };
   const out = structuredClone(event);
   const ev = obj(out);

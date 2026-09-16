@@ -14,5 +14,5 @@ export async function tryDecryptEventData(event: Event, keyring: Keyring): Promi
   const key = keyring.keyForMarker(event.encryption!);
   if (!key) return undefined;
   const { value } = await decryptEvent(event, keyring);
-  return (value as { data?: unknown }).data;
+  return value.data;
 }

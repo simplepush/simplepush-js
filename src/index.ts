@@ -57,6 +57,8 @@ export {
   type TaskSummary,
   type TasksPage,
   type TaskChain,
+  type TaskPayloadWire,
+  type SubtaskPayloadWire,
   type TaskGroupRoster,
   type EventsPage,
   type SubmissionEntry,

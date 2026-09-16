@@ -65,10 +65,32 @@ export type TaskGroupRoster = { groupId: string; tasks: TaskSummary[] };
 
 export type EventsPage = { events: Event[]; nextCursor?: string };
 
+/** A stored file on a submission: the handle to download it by and what is
+ * known about the bytes. */
+export type SubmissionFileWire = { id: string; contentType?: string; checksumSha256?: string; size?: number; filename?: string };
+
+/** A location as the backend stores it: the coordinates, or one `encrypted`
+ * blob of them under the carrier's marker (left as is when no held key opens it). */
+export type LocationWire =
+  | { latitude: number; longitude: number; accuracy?: number; altitude?: number; heading?: number; speed?: number; timestamp?: number }
+  | { encrypted: string };
+
+/** An ad-hoc submission as the feed returns it: the stored record verbatim.
+ * `body.value` and `location` are sealed under the entry's marker. */
+export type SubmissionWire = {
+  id: string;
+  body?: { type: string; value?: string };
+  photo?: SubmissionFileWire;
+  file?: SubmissionFileWire;
+  audio?: SubmissionFileWire & { durationSeconds?: number };
+  location?: LocationWire;
+  createdAt: string;
+};
+
 /** One ad-hoc submission with who sent it and the envelope's encryption
  * marker (the submission carries none of its own). */
 export type SubmissionEntry = {
-  submission: Record<string, unknown> & { id: string; createdAt: string };
+  submission: SubmissionWire;
   actor?: Actor;
   encryption?: EncryptionMarker;
 };

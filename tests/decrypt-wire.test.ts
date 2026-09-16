@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { decryptEvent, decryptSubmission, decryptTaskPayload, decryptTaskSummary } from "../src/decrypt-wire.js";
+import { decryptEvent, decryptNotificationPayload, decryptSubmission, decryptTaskPayload, decryptTaskSummary } from "../src/decrypt-wire.js";
 import { encrypt } from "../src/crypto.js";
 import { Keyring } from "../src/keyring.js";
 
@@ -141,6 +141,22 @@ describe("decryptSubmission", () => {
     expect(undecryptable).toBe(0);
     expect((value as any).body.value).toBe("pump 3 leaking");
     expect((value as any).location).toMatchObject({ latitude: 48.1, longitude: 11.5 });
+  });
+});
+
+describe("decryptNotificationPayload", () => {
+  test("the input answer in reply is sealed under the payload marker", async () => {
+    const payload = { status: "completed", encryption: MARKER, input: { type: "choice" }, reply: { type: "choice", selectedIndex: 1, selectedValue: await e("No") } };
+    const { value, undecryptable } = await decryptNotificationPayload(payload, ring);
+    expect(undecryptable).toBe(0);
+    expect(value.reply?.selectedValue).toBe("No");
+    expect(value.reply?.selectedIndex).toBe(1);
+
+    const foreign = await decryptNotificationPayload({ ...payload, encryption: { type: "personal", keyFingerprint: "other" } as const }, ring);
+    expect(foreign.undecryptable).toBe(1);
+
+    const plain = await decryptNotificationPayload({ status: "completed", input: { type: "text" }, reply: { type: "text", value: BASE64ISH_ANSWER } }, ring);
+    expect(plain.value.reply?.value).toBe(BASE64ISH_ANSWER);
   });
 });
 

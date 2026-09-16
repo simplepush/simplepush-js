@@ -1,5 +1,5 @@
 // Schema-driven decryption of the wire JSON the read surface returns (task
-// payloads, chains, summaries, submissions, raw events). The encrypted fields
+// and notification payloads, chains, summaries, submissions, raw events). The encrypted fields
 // are EXACTLY the ones the send side seals (`encryptInput` / the build*Data
 // helpers in client.ts) and the view layer decrypts (event-views.ts); this
 // module mirrors that map field by field.
@@ -20,7 +20,7 @@
 
 import { decrypt } from "./crypto.js";
 import type { EncryptionMarker, Event } from "./events.js";
-import type { SubmissionEntry, SubtaskPayloadWire, TaskPayloadWire, TaskSummary } from "./queries.js";
+import type { NotificationPayloadWire, SubmissionWire, SubtaskPayloadWire, TaskPayloadWire, TaskSummary } from "./queries.js";
 import { Keyring } from "./keyring.js";
 
 /** A decrypted copy of the input, same shape: sealed fields hold plaintext,
@@ -148,6 +148,15 @@ async function decMessageBody(container: Rec, marker: EncryptionMarker | undefin
   await decLocation(container.location, marker, kr, st);
 }
 
+/** A notification's input answer: one sealed field, chosen by the answer's
+ * type. The same record rides on the notification payload as `reply` and on
+ * the notificationCompleted event. */
+async function decNotificationReply(reply: Rec, marker: EncryptionMarker | undefined, kr: Keyring, st: State): Promise<void> {
+  if (reply.type === "text") await decField(reply, "value", marker, kr, st);
+  if (reply.type === "choice") await decField(reply, "selectedValue", marker, kr, st);
+  if (reply.type === "actions") await decField(reply, "selectedKey", marker, kr, st);
+}
+
 /** A reply record off a payload's `replies` — its own marker only. */
 async function decReplyRecord(r: unknown, kr: Keyring, st: State): Promise<void> {
   const rep = obj(r);
@@ -195,6 +204,16 @@ export async function decryptTaskPayload<T extends TaskPayloadWire | SubtaskPayl
   return { value: out, undecryptable: st.undecryptable };
 }
 
+/** Decrypts a notification payload (single-notification read): the input
+ * answer in `reply` is its only sealed content, under the payload's marker. */
+export async function decryptNotificationPayload<T extends NotificationPayloadWire>(value: T, kr: Keyring): Promise<DecryptedWire<T>> {
+  const st: State = { undecryptable: 0 };
+  const out = structuredClone(value);
+  const reply = obj(out.reply);
+  if (reply) await decNotificationReply(reply, markerOf(out.encryption), kr, st);
+  return { value: out, undecryptable: st.undecryptable };
+}
+
 /** Decrypts a task index / group roster row: `title` and `tag` are its sealed fields. */
 export async function decryptTaskSummary(value: TaskSummary, kr: Keyring): Promise<DecryptedWire<TaskSummary>> {
   const st: State = { undecryptable: 0 };
@@ -211,7 +230,7 @@ export async function decryptTaskSummary(value: TaskSummary, kr: Keyring): Promi
 
 /** Decrypts a submission (body + inline location) under the entry's marker —
  * the submission carries no marker of its own; the feed envelope's applies. */
-export async function decryptSubmission<T extends SubmissionEntry["submission"]>(value: T, kr: Keyring, marker: EncryptionMarker | undefined): Promise<DecryptedWire<T>> {
+export async function decryptSubmission(value: SubmissionWire, kr: Keyring, marker: EncryptionMarker | undefined): Promise<DecryptedWire<SubmissionWire>> {
   const st: State = { undecryptable: 0 };
   const out = structuredClone(value);
   const s = obj(out);
@@ -222,9 +241,7 @@ export async function decryptSubmission<T extends SubmissionEntry["submission"]>
 /** Decrypts one wire event's `data` in place on a clone of the event, by
  * event-data type — the same per-type map the watch views use. Unrecognized
  * types pass through untouched. */
-/** Takes the two envelope fields the sealed content depends on, so a caller
- * can hand it a full event or just `{ encryption, data }`. */
-export async function decryptEvent<T extends Pick<Event, "data" | "encryption">>(event: T, kr: Keyring): Promise<DecryptedWire<T>> {
+export async function decryptEvent<T extends Event>(event: T, kr: Keyring): Promise<DecryptedWire<T>> {
   const st: State = { undecryptable: 0 };
   const out = structuredClone(event);
   const ev = obj(out);
@@ -254,11 +271,7 @@ export async function decryptEvent<T extends Pick<Event, "data" | "encryption">>
     }
     case "notificationCompleted": {
       const reply = obj(data.reply);
-      if (reply) {
-        if (reply.type === "text") await decField(reply, "value", marker, kr, st);
-        if (reply.type === "choice") await decField(reply, "selectedValue", marker, kr, st);
-        if (reply.type === "actions") await decField(reply, "selectedKey", marker, kr, st);
-      }
+      if (reply) await decNotificationReply(reply, marker, kr, st);
       break;
     }
     // The envelope marker on these IS the note's own marker — the note is the

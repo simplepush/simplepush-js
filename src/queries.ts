@@ -45,14 +45,63 @@ export type TaskSummary = {
 
 export type TasksPage = { tasks: TaskSummary[]; nextCursor?: string };
 
-/** The stored payloads, verbatim: a root task and its subtasks, each with the
- * creation time derived from its row. Field shapes mirror the backend's
- * TaskPayload / SubtaskPayload; typed loosely here because the CLI and agents
- * consume them as JSON. */
-export type TaskChain = {
-  task: Record<string, unknown> & { taskId: string; status: TaskStatus; encryption?: EncryptionMarker };
+/** One answer stored on a task or subtask payload (`uploads`), discriminated
+ * by `type` as the backend's Upload ADT is. A sealed field holds ciphertext
+ * under the record's own marker when set, else the payload's. */
+export type UploadWire =
+  | { type: "text"; inputId: string; value: string; encryption?: EncryptionMarker }
+  | { type: "slider"; inputId: string; value: string; encryption?: EncryptionMarker }
+  | { type: "choice"; inputId: string; selectedIndex: number; selectedValue: string; encryption?: EncryptionMarker }
+  | { type: "multiChoice"; inputId: string; selectedIndices: number[]; selectedValues: string[]; encryption?: EncryptionMarker }
+  | { type: "actions"; inputId: string; selectedKey: string; encryption?: EncryptionMarker }
+  | { type: "location"; inputId: string; location: LocationWire; encryption?: EncryptionMarker }
+  | {
+      type: "file";
+      inputId: string;
+      objectKey: string;
+      contentType: string;
+      checksumSha256: string;
+      size: number;
+      deleted: boolean;
+      filename?: string;
+      /** Voice recordings only. */
+      durationSeconds?: number;
+      encryption?: EncryptionMarker;
+    };
+
+/** One message on a task's or subtask's reply thread (`replies`), stored
+ * verbatim. `authorPublicUserId` is the replier's `usr_` handle. */
+export type ReplyWire = {
+  id: string;
+  authorPublicUserId: string;
+  body?: { type: "text"; value: string };
+  photo?: SubmissionFileWire;
+  file?: SubmissionFileWire;
+  audio?: SubmissionFileWire & { durationSeconds: number };
+  location?: LocationWire;
+  encryption?: EncryptionMarker;
   createdAt: string;
-  subtasks: { subtask: Record<string, unknown> & { subtaskId: string; status: TaskStatus; encryption?: EncryptionMarker }; createdAt: string }[];
+};
+
+/** The fields of a stored task or subtask payload the SDK's readers depend
+ * on; everything else the backend stores rides along untyped. */
+type PayloadWire = Record<string, unknown> & {
+  status: TaskStatus;
+  encryption?: EncryptionMarker;
+  inputs?: unknown[];
+  uploads?: UploadWire[];
+  reply?: ReplyMode;
+  replies?: ReplyWire[];
+};
+export type TaskPayloadWire = PayloadWire & { taskId: string };
+export type SubtaskPayloadWire = PayloadWire & { subtaskId: string; parentTaskId: string };
+
+/** The stored payloads, verbatim: a root task and its subtasks, each with the
+ * creation time derived from its row. */
+export type TaskChain = {
+  task: TaskPayloadWire;
+  createdAt: string;
+  subtasks: { subtask: SubtaskPayloadWire; createdAt: string }[];
   /** Who the root was delivered to: org member handles on an org read,
    * personal handles on a personal one, as on `TaskSummary`. */
   recipients: { publicId: string; name?: string }[];
@@ -225,25 +274,29 @@ export async function getTaskChain(t: ReadTransport, taskId: string): Promise<Ta
 }
 
 /** One task by its own id, payload verbatim (status, inputs, answers, replies). */
-export type TaskPayloadWire = TaskChain["task"];
 export async function getTask(t: ReadTransport, taskId: string): Promise<TaskPayloadWire> {
   return getJson<TaskPayloadWire>(t, `v1/tasks/${encodeURIComponent(taskId)}`);
 }
 
 /** One notification by its own id, payload verbatim; `reply` holds the
  * recipient's answer once it exists. */
+/** What the recipient entered on a notification's input, by input kind. */
+export type NotificationReplyWire =
+  | { type: "text"; value: string }
+  | { type: "choice"; selectedIndex: number; selectedValue: string }
+  | { type: "actions"; selectedKey: string };
+
 export type NotificationPayloadWire = Record<string, unknown> & {
   status: string;
   encryption?: EncryptionMarker;
   input?: { type: string };
-  reply?: Record<string, unknown> & { type: string };
+  reply?: NotificationReplyWire;
 };
 export async function getNotification(t: ReadTransport, notificationId: string): Promise<NotificationPayloadWire> {
   return getJson<NotificationPayloadWire>(t, `v1/notifications/${encodeURIComponent(notificationId)}`);
 }
 
 /** One subtask by its own id, payload verbatim. Authorisation is the root task's. */
-export type SubtaskPayloadWire = TaskChain["subtasks"][number]["subtask"];
 export async function getSubtask(t: ReadTransport, subtaskId: string): Promise<SubtaskPayloadWire> {
   return getJson<SubtaskPayloadWire>(t, `v1/subtasks/${encodeURIComponent(subtaskId)}`);
 }

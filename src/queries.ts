@@ -74,6 +74,10 @@ export type UploadWire =
 export type ReplyWire = {
   id: string;
   authorPublicUserId: string;
+  /** The author's name as known at reply time (member name on an org reply,
+   * display name on a personal one); absent when they had none, and on
+   * replies stored before names were recorded. */
+  authorName?: string;
   body?: { type: "text"; value: string };
   photo?: SubmissionFileWire;
   file?: SubmissionFileWire;

@@ -150,8 +150,10 @@ export type SearchHit = {
   kind: SearchKind;
   ref: string;
   title?: string;
-  /** Who wrote the unit (`usr_` id), when known. */
-  actor?: string;
+  /** Who wrote the unit, when known: the `usr_` handle plus the name the
+   * scope knows them by (member name on an org search, display name on a
+   * personal one). */
+  actor?: { publicId: string; name?: string };
   createdAt: string;
   score: number;
   snippet?: string;

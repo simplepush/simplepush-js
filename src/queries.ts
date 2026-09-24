@@ -7,7 +7,7 @@
 
 import { HttpError } from "./errors.js";
 import type { Actor, EncryptionMarker, Event } from "./events.js";
-import type { ReplyMode } from "./types.js";
+import type { ContentFormat, Input, ReplyMode } from "./types.js";
 import type { Submission as _Submission } from "./event-views.js";
 
 export type TaskStatus = "pending" | "completed" | "canceled" | "declined" | "expired";
@@ -89,20 +89,68 @@ export type ReplyWire = {
   createdAt: string;
 };
 
-/** The fields of a stored task or subtask payload the SDK's readers depend
- * on; everything else the backend stores rides along untyped. */
-type PayloadWire = Record<string, unknown> & {
+/** A stored input definition: the send-side `Input` plus the `inp_` id the
+ * backend assigned and, on upload inputs, the in-flight marker. */
+export type InputWire = Input & { id: string; uploadingSince?: string };
+
+export type AttachmentWire =
+  | { type: "file"; id: string; filename: string; contentType: string; size: number; checksumSha256?: string; status: "uploading" | "uploaded" | "failed" }
+  | { type: "link"; url: string };
+
+/** Where the push for a payload went, as recorded at send time. */
+export type PushDestinationWire =
+  | { type: "broadcast" }
+  | { type: "member" }
+  | { type: "topic"; topicId: string }
+  | { type: "orgTopic"; orgTopicId: string }
+  | { type: "directToSelf"; userId: string }
+  | { type: "subtaskOf"; parentTaskId: string; topicId?: string; selfEncryption?: boolean };
+
+export type SenderRefWire = { publicId: string; name?: string };
+
+export type CancelReasonWire = "canceled" | "answered" | "superseded";
+export type DeclineReasonWire = "declined" | "failed";
+
+/** The cancel record a canceled payload carries; `note` is sealed under the
+ * record's own marker. `supersededBy` names the replacement task or subtask. */
+export type CancellationWire = { reason: CancelReasonWire; note?: string; supersededBy?: string; encryption?: EncryptionMarker; canceledAt: string };
+
+/** One recipient's decline; the payload flips to declined once every
+ * recipient has one. */
+export type DeclineWire = { by: string; name?: string; reason: DeclineReasonWire; note?: string; encryption?: EncryptionMarker; declinedAt: string };
+
+/** A stored task or subtask payload: the backend's TaskPayload / SubtaskPayload,
+ * field for field. Sealed fields (title, content, input values, replies …)
+ * hold ciphertext under the payload's marker until decrypted. */
+type PayloadWire = {
+  title?: string;
+  content?: string;
+  contentFormat?: ContentFormat;
+  attachments: AttachmentWire[];
+  inputs: InputWire[];
+  uploads: UploadWire[];
+  autoCommit: boolean;
+  encryption?: EncryptionMarker;
   status: TaskStatus;
   /** When `status` left pending, for any terminal state; absent while pending. */
   closedAt?: string;
-  encryption?: EncryptionMarker;
-  inputs?: unknown[];
-  uploads?: UploadWire[];
+  version: number;
   reply?: ReplyMode;
   replies?: ReplyWire[];
+  declines?: DeclineWire[];
 };
-export type TaskPayloadWire = PayloadWire & { taskId: string };
-export type SubtaskPayloadWire = PayloadWire & { subtaskId: string; parentTaskId: string };
+export type TaskPayloadWire = PayloadWire & {
+  taskId: string;
+  pushDestination: PushDestinationWire;
+  sender?: SenderRefWire;
+  cancellation?: CancellationWire;
+  expiresAt?: string;
+};
+export type SubtaskPayloadWire = PayloadWire & {
+  subtaskId: string;
+  parentTaskId: string;
+  cancellation?: CancellationWire;
+};
 
 /** The stored payloads, verbatim: a root task and its subtasks, each with the
  * creation time derived from its row. */

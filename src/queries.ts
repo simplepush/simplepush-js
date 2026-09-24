@@ -40,6 +40,8 @@ export type TaskSummary = {
   reply?: ReplyMode;
   createdAt: string;
   expiresAt?: string;
+  /** When the task left pending, for any terminal state; absent while pending. */
+  closedAt?: string;
   encryption?: EncryptionMarker;
 };
 
@@ -91,6 +93,8 @@ export type ReplyWire = {
  * on; everything else the backend stores rides along untyped. */
 type PayloadWire = Record<string, unknown> & {
   status: TaskStatus;
+  /** When `status` left pending, for any terminal state; absent while pending. */
+  closedAt?: string;
   encryption?: EncryptionMarker;
   inputs?: unknown[];
   uploads?: UploadWire[];

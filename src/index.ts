@@ -130,6 +130,7 @@ export type {
 } from "./event-views.js";
 export type { OrgSendTarget } from "./client.js";
 export type {
+  PushPriority,
   CreateTaskJsonResponse,
   CreateTaskGroupJsonResponse,
   CreateTaskResponse,

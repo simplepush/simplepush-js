@@ -78,7 +78,10 @@ action's stable `key` comes back), `slider` (`min`/`max`/`step`/`unit`),
 `photo`, `voiceRecording`, `file`, `location`. A notification input is `text`,
 `choice`, or `actions`; a notification can also carry ONE media item — `image`
 (iOS + Android) or `audio` (iOS only), an uploaded `FileAttachment` or a URL
-string — and `critical: true` (iOS Critical Alert).
+string — and a `priority` from 1 (minimal) to 5 (critical; sounds even on a
+muted phone) with an optional `criticalVolume` (0 to 1, level 5 only, iOS
+only: Android plays the alarm at the phone's alarm volume). Tasks and subtasks
+take the same two fields.
 
 ```ts
 // Richer inputs: action buttons, a slider, multi-choice, a photo request.

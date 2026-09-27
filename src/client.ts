@@ -43,6 +43,7 @@ import type {
   SendOptions,
   SendNotificationOptions,
   NotificationAction,
+  PushPriority,
 } from "./types.js";
 import { isTaskGroupResponse, isSubtaskGroupResponse, isNotificationGroupResponse } from "./types.js";
 import { parseBaseUrl } from "./url.js";
@@ -102,6 +103,19 @@ function validateInputs(inputs: Input[] | undefined): void {
   }
 }
 
+/** The plaintext priority fields of a send. The deprecated `critical` flag on
+ * the option types maps to level 5 when no `priority` is given. */
+function priorityFields(opts: { priority?: PushPriority; criticalVolume?: number; critical?: boolean }): {
+  priority?: PushPriority;
+  criticalVolume?: number;
+} {
+  const priority = opts.priority ?? (opts.critical ? 5 : undefined);
+  return {
+    ...(priority !== undefined ? { priority } : {}),
+    ...(opts.criticalVolume !== undefined ? { criticalVolume: opts.criticalVolume } : {}),
+  };
+}
+
 /** Build a `CreateTaskRequest` from a plaintext `SendOptions`, encrypting every
  * field under `enc.key` and attaching `enc.marker` when a key is present;
  * otherwise the body is sent in the clear. The single place content encryption
@@ -125,6 +139,7 @@ async function buildBody(
     links: opts.links ? await Promise.all(opts.links.map((u) => e(u))) : [],
     files,
     autoCommit: opts.autoCommit ?? false,
+    ...priorityFields(opts),
     ...(opts.reply !== undefined ? { reply: opts.reply } : {}),
     // Plaintext marker — never encrypted, so the recipient can pick the renderer.
     ...(opts.contentFormat !== undefined ? { contentFormat: opts.contentFormat } : {}),
@@ -174,7 +189,7 @@ async function buildNotificationBody(
     ...(opts.content !== undefined ? { content: await e(opts.content) } : {}),
     ...(media ? { media } : {}),
     ...(opts.link !== undefined ? { link: await e(opts.link) } : {}),
-    ...(opts.critical ? { critical: true } : {}),
+    ...priorityFields(opts),
     // Recipient-state model: sent explicitly only when opting into the
     // shared notification; absent = the backend's independent-instances default.
     ...(opts.shared ? { shared: true } : {}),
@@ -212,7 +227,7 @@ async function buildSubtaskData(
     links: opts.links ? await Promise.all(opts.links.map((u) => e(u))) : [],
     files,
     autoCommit: opts.autoCommit ?? false,
-    ...(opts.critical ? { critical: true } : {}),
+    ...priorityFields(opts),
     ...(opts.reply !== undefined ? { reply: opts.reply } : {}),
     ...(opts.contentFormat !== undefined ? { contentFormat: opts.contentFormat } : {}),
     ...(enc ? { encryption: enc.marker } : {}),

@@ -130,6 +130,8 @@ type PayloadWire = {
   inputs: InputWire[];
   uploads: UploadWire[];
   autoCommit: boolean;
+  /** Interruption level of the push, 1 (minimal) to 5 (critical). */
+  priority: number;
   encryption?: EncryptionMarker;
   status: TaskStatus;
   /** When `status` left pending, for any terminal state; absent while pending. */

@@ -169,6 +169,11 @@ export type ReplyMode = "one-shot" | "sticky" | "one-time-per-user";
  * `ContentFormat`. */
 export type ContentFormat = "plain" | "markdown";
 
+/** How loudly a push interrupts the recipient, 1 (minimal) to 5 (critical).
+ * Absent = 3. Level 4 breaks through iOS Focus / Android Do Not Disturb, level
+ * 5 also sounds on a muted phone. The recipient's settings have the final say. */
+export type PushPriority = 1 | 2 | 3 | 4 | 5;
+
 export type CreateTaskRequest = {
   // Exactly one target: `topic` (personal/org topic), `member` (org member by
   // name), or `broadcast` (whole org). member/broadcast require an OrgClient.
@@ -183,6 +188,10 @@ export type CreateTaskRequest = {
   files: FileAttachmentUploadData[];
   autoCommit: boolean;
   encryption?: { type: "personal"; keyFingerprint: string } | { type: "org"; v: number };
+  priority?: PushPriority;
+  /** Playback volume of the critical alert sound on iOS, greater than 0 and at
+   * most 1 (absent = 1). Accepted with priority 5 only. */
+  criticalVolume?: number;
   reply?: ReplyMode;
   contentFormat?: ContentFormat;
   /** Recipient-state model. Absent/false (the default) = INDEPENDENT: every
@@ -216,6 +225,10 @@ export type SendOptions = {
   /** Default false: the task renders as a form with one Submit for all
    * inputs; true commits each input as it is filled. */
   autoCommit?: boolean;
+  /** 1 (minimal) to 5 (critical); absent = 3. See PushPriority. */
+  priority?: PushPriority;
+  /** iOS critical alert volume, 0 < v <= 1; priority 5 only. */
+  criticalVolume?: number;
   reply?: ReplyMode;
   /** Opt the body into Markdown rendering on the recipient. Plaintext marker
    * (never encrypted); omit / "plain" renders `content` as-is. */
@@ -322,7 +335,8 @@ export type SubtaskData = {
   files: FileAttachmentUploadData[];
   autoCommit: boolean;
   encryption?: { type: "personal"; keyFingerprint: string } | { type: "org"; v: number };
-  critical?: boolean;
+  priority?: PushPriority;
+  criticalVolume?: number;
   reply?: ReplyMode;
   contentFormat?: ContentFormat;
   /** Replay guard — see CreateTaskRequest.idempotencyKey. */
@@ -349,6 +363,9 @@ export type SendSubtaskOptions = {
   files?: FileAttachment[];
   /** Default false: one Submit for all inputs; true commits each as filled. */
   autoCommit?: boolean;
+  priority?: PushPriority;
+  criticalVolume?: number;
+  /** @deprecated Send `priority: 5` instead. Ignored when `priority` is set. */
   critical?: boolean;
   reply?: ReplyMode;
   /** Opt the body into Markdown rendering (plaintext marker; omit = plain). */
@@ -475,8 +492,8 @@ export type CreateNotificationRequest = {
   // notification has no input. Encrypted like the title on an encrypted send.
   link?: string;
   encryption?: { type: "personal"; keyFingerprint: string } | { type: "org"; v: number };
-  // iOS Critical Alert (bypasses silent mode / Do Not Disturb). Android ignores it.
-  critical?: boolean;
+  priority?: PushPriority;
+  criticalVolume?: number;
   /** Recipient-state model. Absent/false (the default) = INDEPENDENT: every
    * recipient gets their own notification instance under a group; `true` = the
    * single shared notification the first reply completes for everyone. */
@@ -506,6 +523,11 @@ export type SendNotificationOptions = {
    * that app. Mutually exclusive with `input` — the input's buttons take the
    * action slots. */
   link?: string;
+  /** 1 (minimal) to 5 (critical); absent = 3. See PushPriority. */
+  priority?: PushPriority;
+  /** iOS critical alert volume, 0 < v <= 1; priority 5 only. */
+  criticalVolume?: number;
+  /** @deprecated Send `priority: 5` instead. Ignored when `priority` is set. */
   critical?: boolean;
   /** Recipient-state model: `true` = one single shared notification (all
    * recipients share one state; `sendNotification` returns a `Notification`);

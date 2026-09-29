@@ -293,7 +293,7 @@ export type PasswordsConfig = string | Array<[string, string] | string>;
 
 /** Options of `submissions()`: `since` (ISO 8601) resumes from that point,
  * backfilling earlier submissions; `idleMs` ends the stream after that many ms
- * of silence; `signal` cancels it. */
+ * of silence; `signal` ends it. */
 export type SubmissionsOptions = { signal?: AbortSignal; idleMs?: number; since?: string };
 
 /** Passwords for one call on a personal `Client` — the receive-side twin of a
@@ -634,7 +634,7 @@ abstract class BaseClient<Scope extends object> {
    * and `OrgClient`. Body text decrypts via this client's keyring; `photo`/`file`
    * are downloadable. `since` (ISO 8601) resumes from that point, backfilling
    * submissions that arrived earlier; `idleMs` ends the stream after that many
-   * ms of silence; `signal` cancels it. */
+   * ms of silence; `signal` ends it. */
   submissions(opts: SubmissionsOptions & Scope = {} as SubmissionsOptions & Scope): AsyncIterableIterator<Submission> {
     return this.buildSubmissions(opts, opts);
   }
@@ -647,32 +647,43 @@ abstract class BaseClient<Scope extends object> {
     const resolveKey = buildKeyResolver(keyring, undefined);
     const dec = buildDecryptor(resolveKey);
     const base = { transport: this.downloadTransport(), resolveKey };
+    // Ends the source on idle, on the caller's abort, or when the consumer
+    // leaves its loop. A return() called while a read is pending waits for
+    // that read; `signal` or `idleMs` ends a pending read.
+    const ac = new AbortController();
+    const onAbort = () => ac.abort();
+    if (opts.signal?.aborted) return;
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
     const it = this.events({
-      ...(opts.signal ? { signal: opts.signal } : {}),
+      signal: ac.signal,
       ...(opts.since !== undefined ? { since: opts.since } : {}),
     })[Symbol.asyncIterator]();
     try {
       while (true) {
-        let res: IteratorResult<Event>;
-        if (opts.idleMs !== undefined) {
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          const idle = new Promise<symbol>((resolve) => {
-            timer = setTimeout(() => resolve(IDLE), opts.idleMs);
-          });
-          const winner = await Promise.race([it.next(), idle]);
-          if (timer !== undefined) clearTimeout(timer);
-          if (winner === IDLE) return;
-          res = winner as IteratorResult<Event>;
-        } else {
-          res = await it.next();
+        const pending = it.next();
+        pending.catch(() => {});
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const idle = opts.idleMs === undefined
+          ? undefined
+          : new Promise<typeof IDLE>((resolve) => { timer = setTimeout(() => resolve(IDLE), opts.idleMs); });
+        let res: IteratorResult<Event> | typeof IDLE;
+        try {
+          res = await (idle ? Promise.race([pending, idle]) : pending);
+        } catch (err) {
+          if (ac.signal.aborted) return;
+          throw err;
+        } finally {
+          clearTimeout(timer);
         }
-        if (res.done) return;
+        if (res === IDLE || res.done) return;
         const ev = res.value;
         if (ev.eventType !== "SubmissionCreated") continue;
         yield await wrapSubmission(ev, dec, base);
       }
     } finally {
-      await it.return?.();
+      opts.signal?.removeEventListener("abort", onAbort);
+      ac.abort();
+      await it.return?.().catch(() => {});
     }
   }
 

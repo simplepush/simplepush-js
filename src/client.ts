@@ -292,8 +292,8 @@ type CommonConfig = {
 export type PasswordsConfig = string | Array<[string, string] | string>;
 
 /** Options of `submissions()`: `since` (ISO 8601) resumes from that point,
- * backfilling earlier submissions; `idleMs` ends the stream after that many ms
- * of silence; `signal` ends it. */
+ * backfilling earlier submissions, over a connection of its own; `idleMs` ends
+ * the stream after that many ms of silence; `signal` ends it. */
 export type SubmissionsOptions = { signal?: AbortSignal; idleMs?: number; since?: string };
 
 /** Passwords for one call on a personal `Client` — the receive-side twin of a
@@ -632,15 +632,23 @@ abstract class BaseClient<Scope extends object> {
    * content (text body + optional photo/file) with no
    * associated task; a task reply without the task. Available on both `Client`
    * and `OrgClient`. Body text decrypts via this client's keyring; `photo`/`file`
-   * are downloadable. `since` (ISO 8601) resumes from that point, backfilling
-   * submissions that arrived earlier; `idleMs` ends the stream after that many
-   * ms of silence; `signal` ends it. */
+   * are downloadable.
+   *
+   * Without `since` the stream shares the client's one event connection with
+   * every task and notification stream and delivers submissions from now on:
+   * a submission created before the first read is skipped, by this machine's
+   * clock. `since` (ISO 8601) backfills from that point instead, over a
+   * connection of its own. `idleMs` ends the stream after that many ms of
+   * silence; `signal` ends it. */
   submissions(opts: SubmissionsOptions & Scope = {} as SubmissionsOptions & Scope): AsyncIterableIterator<Submission> {
     return this.buildSubmissions(opts, opts);
   }
 
   protected async *buildSubmissions(opts: SubmissionsOptions, scope: Scope): AsyncIterableIterator<Submission> {
     const IDLE = Symbol("idle");
+    // The shared connection replays from the earliest send or the last event
+    // it saw; without `since`, submissions from before this point are skipped.
+    const startedAt = Date.now();
     // A submission is encrypted under the author's Personal Password key on a
     // personal account, or an org master key in an organization; never a topic key.
     const keyring = await this.scopedKeyring(scope, { includePasswordSalt: true });
@@ -654,10 +662,12 @@ abstract class BaseClient<Scope extends object> {
     const onAbort = () => ac.abort();
     if (opts.signal?.aborted) return;
     opts.signal?.addEventListener("abort", onAbort, { once: true });
-    const it = this.events({
-      signal: ac.signal,
-      ...(opts.since !== undefined ? { since: opts.since } : {}),
-    })[Symbol.asyncIterator]();
+    // From now on: ride the client's shared connection, like every handle
+    // stream. A `since` backfill needs a connection starting at that point.
+    const source = opts.since === undefined
+      ? this.hub().attachRaw({ signal: ac.signal })
+      : this.events({ signal: ac.signal, since: opts.since });
+    const it = source[Symbol.asyncIterator]();
     try {
       while (true) {
         const pending = it.next();
@@ -678,6 +688,7 @@ abstract class BaseClient<Scope extends object> {
         if (res === IDLE || res.done) return;
         const ev = res.value;
         if (ev.eventType !== "SubmissionCreated") continue;
+        if (opts.since === undefined && ev.createdAt !== undefined && Date.parse(ev.createdAt) < startedAt) continue;
         yield await wrapSubmission(ev, dec, base);
       }
     } finally {

@@ -1,11 +1,14 @@
-// How `submissions()` streams end and where they start. A fake socket factory
-// records every connection the client opens.
+// Which connection `submissions()` reads: without `since` the client's shared
+// event hub (one socket for everything), with `since` a connection of its own.
+// A fake socket factory records every connection the client opens.
 
 import { describe, expect, test } from "bun:test";
 
 import { Client } from "../src/index.js";
 import type { Event } from "../src/events.js";
 import type { SimplepushWebSocket, WebSocketFactory } from "../src/ws.js";
+
+const TASK = "tsk_00000000-0000-7000-8000-00000000000a";
 
 type FakeSocket = { url: string; push: (ev: Event) => void };
 
@@ -49,19 +52,47 @@ function fakeSockets(): { factory: WebSocketFactory; sockets: FakeSocket[] } {
 const userFetch = (async () =>
   new Response(JSON.stringify({ userId: "u", passwordSalt: "salt" }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
 
-function submissionEvent(version: number, text: string): Event {
+function submissionEvent(version: number, text: string, createdAt = "2026-07-03T10:00:00Z"): Event {
   return {
     eventType: "SubmissionCreated",
     version,
-    createdAt: "2026-07-03T10:00:00Z",
-    data: { type: "submissionCreated", submission: { id: `sbm_${version}`, body: { type: "text", value: text }, createdAt: "2026-07-03T10:00:00Z" } },
+    createdAt,
+    data: { type: "submissionCreated", submission: { id: `sbm_${version}`, body: { type: "text", value: text }, createdAt } },
   } as unknown as Event;
+}
+
+function completedEvent(version: number): Event {
+  return { eventType: "TaskCompleted", version, createdAt: "2026-07-03T10:01:30Z", data: { type: "taskCompleted", taskId: TASK, inputsUploaded: [] } };
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
 
 describe("submissions() connection", () => {
-  test("with since the connection starts there", async () => {
+  test("without since it shares one socket with task streams", async () => {
+    const { factory, sockets } = fakeSockets();
+    const client = new Client({ apiToken: "tok", fetch: userFetch, webSocketFactory: factory });
+    const group = client.watchTaskGroup({ groupId: "grptsk_1", members: [{ taskId: TASK }] });
+
+    const subs = client.submissions()[Symbol.asyncIterator]();
+    const firstSub = subs.next();
+    const inputs = group.inputs()[Symbol.asyncIterator]();
+    const firstInput = inputs.next();
+    await tick();
+
+    expect(sockets.length).toBe(1);
+    sockets[0]!.push(submissionEvent(1, "pump 3 is leaking", new Date(Date.now() + 1000).toISOString()));
+    sockets[0]!.push(completedEvent(2));
+
+    const sub = await firstSub;
+    expect(sub.done).toBe(false);
+    expect(sub.value!.body).toEqual({ kind: "text", text: "pump 3 is leaking" });
+    expect((await firstInput).value!.item.kind).toBe("taskCompleted");
+    expect(sockets.length).toBe(1);
+    await subs.return?.();
+    await inputs.return?.();
+  });
+
+  test("with since it opens a connection of its own that starts there", async () => {
     const { factory, sockets } = fakeSockets();
     const client = new Client({ apiToken: "tok", fetch: userFetch, webSocketFactory: factory });
     const subs = client.submissions({ since: "2026-07-01T00:00:00Z" })[Symbol.asyncIterator]();
@@ -93,5 +124,43 @@ describe("submissions() connection", () => {
     const started = Date.now();
     for await (const _ of client.submissions({ idleMs: 50 })) { /* nothing arrives */ }
     expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  test("with since the caller's signal ends the stream without an error", async () => {
+    const { factory } = fakeSockets();
+    const client = new Client({ apiToken: "tok", fetch: userFetch, webSocketFactory: factory });
+    const ac = new AbortController();
+    const seen: unknown[] = [];
+    const done = (async () => {
+      for await (const s of client.submissions({ since: "2026-07-01T00:00:00Z", signal: ac.signal })) seen.push(s);
+    })();
+    await tick();
+    ac.abort();
+    await done;
+    expect(seen).toEqual([]);
+  });
+
+  test("with since idleMs ends a stream that never receives anything", async () => {
+    const { factory } = fakeSockets();
+    const client = new Client({ apiToken: "tok", fetch: userFetch, webSocketFactory: factory });
+    const started = Date.now();
+    for await (const _ of client.submissions({ since: "2026-07-01T00:00:00Z", idleMs: 50 })) { /* nothing arrives */ }
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  test("without since a backfill for an earlier send delivers no earlier submissions", async () => {
+    const { factory, sockets } = fakeSockets();
+    const client = new Client({ apiToken: "tok", fetch: userFetch, webSocketFactory: factory });
+    // The earlier send moves the shared connection's start back to its send time.
+    client.watchTaskGroup({ groupId: "grptsk_1", createdAt: "2026-07-01T00:00:00Z", members: [{ taskId: TASK }] });
+
+    const subs = client.submissions()[Symbol.asyncIterator]();
+    const first = subs.next();
+    await tick();
+
+    sockets[0]!.push(submissionEvent(1, "before the call", "2026-07-02T00:00:00Z"));
+    sockets[0]!.push(submissionEvent(2, "after the call", new Date(Date.now() + 1000).toISOString()));
+    expect((await first).value!.body).toEqual({ kind: "text", text: "after the call" });
+    await subs.return?.();
   });
 });

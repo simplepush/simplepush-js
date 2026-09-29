@@ -245,8 +245,11 @@ for await (const sub of client.submissions({ idleMs: 300_000 })) {
 ```
 
 `photo`/`file`/`audio` are download handles (`read()` / `save()` / `downloadUrl()`). Audio attachments carry `durationSeconds` (voice-recording length in seconds). Location data (latitude, longitude, accuracy, altitude, heading, speed, timestamp) is provided inline via `location` when available; when the parent is encrypted it is decrypted with the same key as the body.
-`since` (ISO 8601) resumes from that point, backfilling earlier submissions;
-`idleMs` ends the stream after that many ms of silence; `signal` cancels it.
+Without `since` the stream shares the client's one event connection with every
+task and notification stream and delivers submissions from now on. A submission
+created before the first read is skipped, by this machine's clock. `since`
+(ISO 8601) backfills from that point, over a connection of its own. `idleMs`
+ends the stream after that many ms of silence; `signal` ends it.
 
 Encrypted submissions are decrypted with your **account default password** (not
 a topic password). Pass it in `passwords` (a bare string):

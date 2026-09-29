@@ -135,7 +135,7 @@ export class EventHub {
     }
   }
 
-  /** Async iterator over the full multiplexed feed (manual inspection). */
+  /** Async iterator over the full multiplexed feed; `submissions()` reads it. */
   async *attachRaw(opts: { signal?: AbortSignal } = {}): AsyncIterableIterator<Event> {
     this.ensureRunning();
     const mailbox = new Mailbox();

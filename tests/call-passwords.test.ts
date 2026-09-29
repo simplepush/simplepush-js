@@ -9,6 +9,7 @@ import { Client, OrgClient, decrypt, type GroupReply } from "../src/index.js";
 import { deriveKey, encrypt } from "../src/crypto.js";
 import type { Event } from "../src/events.js";
 import type { Reply } from "../src/event-views.js";
+import type { WebSocketFactory } from "../src/ws.js";
 
 const TASK = "tsk_00000000-0000-7000-8000-00000000000a";
 const GROUP = "grptsk_00000000-0000-7000-8000-000000000001";
@@ -133,13 +134,25 @@ describe("OrgClient submissions", () => {
     const noFetch = (async () => {
       throw new Error("an OrgClient must not fetch /v1/user");
     }) as typeof fetch;
-    const org = new OrgClient({ apiKey: "k", orgMasterKeys: [{ version: 3, key: KEY }], fetch: noFetch });
     const ev: Event = {
       eventType: "SubmissionCreated",
       encryption: { type: "org", v: 3 },
       data: { type: "submissionCreated", submission: { id: "sbm_1", body: { type: "text", value: await encrypt(KEY, "pump 3 is leaking") }, createdAt: "t" } },
     };
-    (org as unknown as { events: () => AsyncIterable<Event> }).events = async function* () { yield ev; };
+    // A socket that delivers the one event, then stays open until closed.
+    const webSocketFactory: WebSocketFactory = () => {
+      let close!: () => void;
+      const closed = new Promise<void>((resolve) => { close = resolve; });
+      return {
+        closed,
+        async *messages() {
+          yield JSON.stringify(ev);
+          await closed;
+        },
+        close,
+      };
+    };
+    const org = new OrgClient({ apiKey: "k", orgMasterKeys: [{ version: 3, key: KEY }], fetch: noFetch, webSocketFactory });
     const seen: string[] = [];
     for await (const sub of org.submissions({ idleMs: 50 })) seen.push(sub.body?.kind === "text" ? sub.body.text : "");
     expect(seen).toEqual(["pump 3 is leaking"]);

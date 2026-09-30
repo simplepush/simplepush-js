@@ -4,6 +4,8 @@
 // with the events WebSocket); a bearer credential passes `authHeaders` instead.
 // The endpoint is scope-free on the backend, so any live token reaches it.
 
+import { HttpError } from "./errors.js";
+
 export interface UserInfoResponse {
   userId: string;
   // Raw wire shape: the backend OMITS the key for a non-org account (zio-json
@@ -33,7 +35,7 @@ export async function fetchUserInfo(opts: FetchUserInfoOptions): Promise<UserInf
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`GET /v1/user failed: ${res.status} ${res.statusText}${body ? ` — ${body}` : ""}`);
+    throw new HttpError("GET", "/v1/user", res.status, body);
   }
   return (await res.json()) as UserInfoResponse;
 }

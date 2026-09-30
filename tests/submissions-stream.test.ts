@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { Client } from "../src/index.js";
+import { Client, HttpError } from "../src/index.js";
 import type { Event } from "../src/events.js";
 import type { SimplepushWebSocket, WebSocketFactory } from "../src/ws.js";
 
@@ -116,6 +116,25 @@ describe("submissions() connection", () => {
     ac.abort();
     await done;
     expect(seen).toEqual([]);
+  });
+
+  test("a rejected API token surfaces as an HttpError with its status", async () => {
+    // With a Personal Password the stream first fetches the password salt.
+    const rejected = (async () =>
+      new Response('{"error":"authorization_error","msg":"Invalid API token"}', { status: 401 })) as typeof fetch;
+    const { factory, sockets } = fakeSockets();
+    const client = new Client({ apiToken: "revoked", passwords: "personal-pw", fetch: rejected, webSocketFactory: factory });
+    let caught: unknown;
+    try {
+      for await (const _ of client.submissions()) { /* nothing arrives */ }
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(HttpError);
+    const err = caught as HttpError;
+    expect([err.method, err.path, err.status]).toEqual(["GET", "/v1/user", 401]);
+    expect(err.body).toContain("Invalid API token");
+    expect(sockets.length).toBe(0);
   });
 
   test("idleMs ends a stream that never receives anything", async () => {
